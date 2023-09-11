@@ -5,10 +5,7 @@ use tokio::{
     time::{sleep, Duration},
 };
 
-mod runner;
-mod subsystem;
-
-type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
+use tokio_graceful_shutdown_rewrite::BoxedError;
 
 async fn counter(sender: mpsc::Sender<u32>) {
     let mut counter: u32 = 0;

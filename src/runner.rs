@@ -1,53 +1,11 @@
 use std::future::Future;
 
-use crate::BoxedError;
+use crate::{BoxedError, StopReason};
 
-#[derive(Debug)]
-pub enum StopReason {
-    Finish,
-    Panic,
-    Error(BoxedError),
-    Cancelled,
-}
+mod alive_guard;
+use self::alive_guard::AliveGuard;
 
-pub struct AliveGuard {
-    finished_callback: Option<Box<dyn FnOnce(StopReason)>>,
-    cancelled_callback: Option<Box<dyn FnOnce()>>,
-}
-
-impl AliveGuard {
-    pub fn new(finished_callback: impl FnOnce(StopReason) + 'static) -> Self {
-        Self {
-            finished_callback: Some(Box::new(finished_callback)),
-            cancelled_callback: None,
-        }
-    }
-
-    pub fn subsystem_ended(mut self, reason: StopReason) {
-        let finished_callback = self.finished_callback.take().expect(
-            "This should never happen. Please report this; it indicates a programming error.",
-        );
-        finished_callback(reason);
-    }
-
-    pub fn on_cancel(&mut self, cancelled_callback: impl FnOnce() + 'static) {
-        assert!(self.cancelled_callback.is_none());
-        self.cancelled_callback = Some(Box::new(cancelled_callback));
-    }
-}
-
-impl Drop for AliveGuard {
-    fn drop(&mut self) {
-        if let Some(finished_callback) = self.finished_callback.take() {
-            finished_callback(StopReason::Cancelled);
-        }
-        if let Some(cancelled_callback) = self.cancelled_callback.take() {
-            cancelled_callback()
-        }
-    }
-}
-
-pub async fn run_subsystem<Fut, Subsys>(subsystem: Subsys, mut guard: AliveGuard)
+pub(crate) async fn run_subsystem<Fut, Subsys>(subsystem: Subsys, mut guard: AliveGuard)
 where
     Subsys: 'static + FnOnce() -> Fut + Send,
     Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
@@ -72,22 +30,6 @@ where
     guard.subsystem_ended(result);
 }
 
-/* need:
-- function that runs on all exit paths of the subsystem
-    - that also has access to the locked parent, to remove itself from the list of children
-- is list of children really important?
-    - atomic counter could work
-    - but what about error propagation?
-
-- error propagation maybe not necessary.
-    - register closure that will be executed on error/shutdown of the child
-    - every subsystem can have 'shutdown triggers' attached to it
-
-fixed facts:
-- subsystems will never change their parent
-
-*/
-
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -111,7 +53,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_subsystem_finish() {
+    async fn finish() {
         let (result, guard) = create_result_and_guard();
 
         run_subsystem(|| async { Result::<(), BoxedError>::Ok(()) }, guard).await;
@@ -123,7 +65,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_subsystem_panic() {
+    async fn panic() {
         let (result, guard) = create_result_and_guard();
 
         run_subsystem(
@@ -141,7 +83,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_subsystem_error() {
+    async fn error() {
         let (result, guard) = create_result_and_guard();
 
         run_subsystem(|| async { Err(String::from("").into()) }, guard).await;
@@ -153,7 +95,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_subsystem_cancelled_with_delay() {
+    async fn cancelled_with_delay() {
         let (result, guard) = create_result_and_guard();
 
         let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
@@ -194,7 +136,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_subsystem_cancelled_immediately() {
+    async fn cancelled_immediately() {
         let (result, guard) = create_result_and_guard();
 
         let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
