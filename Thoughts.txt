@@ -1,0 +1,13 @@
+need:
+- function that runs on all exit paths of the subsystem
+    - that also has access to the locked parent, to remove itself from the list of children
+- is list of children really important?
+    - atomic counter could work
+    - but what about error propagation?
+
+- error propagation maybe not necessary.
+    - register closure that will be executed on error/shutdown of the child
+    - every subsystem can have 'shutdown triggers' attached to it
+
+fixed facts:
+- subsystems will never change their parent

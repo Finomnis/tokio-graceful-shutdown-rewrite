@@ -1,11 +1,53 @@
 use std::future::Future;
 
-use crate::{
-    guard::{AliveGuard, StopReason},
-    BoxedError,
-};
+use crate::BoxedError;
 
-async fn run_subsystem<Fut, Subsys>(subsystem: Subsys, mut guard: AliveGuard)
+#[derive(Debug)]
+pub enum StopReason {
+    Finish,
+    Panic,
+    Error(BoxedError),
+    Cancelled,
+}
+
+pub struct AliveGuard {
+    finished_callback: Option<Box<dyn FnOnce(StopReason)>>,
+    cancelled_callback: Option<Box<dyn FnOnce()>>,
+}
+
+impl AliveGuard {
+    pub fn new(finished_callback: impl FnOnce(StopReason) + 'static) -> Self {
+        Self {
+            finished_callback: Some(Box::new(finished_callback)),
+            cancelled_callback: None,
+        }
+    }
+
+    pub fn subsystem_ended(mut self, reason: StopReason) {
+        let finished_callback = self.finished_callback.take().expect(
+            "This should never happen. Please report this; it indicates a programming error.",
+        );
+        finished_callback(reason);
+    }
+
+    pub fn on_cancel(&mut self, cancelled_callback: impl FnOnce() + 'static) {
+        assert!(self.cancelled_callback.is_none());
+        self.cancelled_callback = Some(Box::new(cancelled_callback));
+    }
+}
+
+impl Drop for AliveGuard {
+    fn drop(&mut self) {
+        if let Some(finished_callback) = self.finished_callback.take() {
+            finished_callback(StopReason::Cancelled);
+        }
+        if let Some(cancelled_callback) = self.cancelled_callback.take() {
+            cancelled_callback()
+        }
+    }
+}
+
+pub async fn run_subsystem<Fut, Subsys>(subsystem: Subsys, mut guard: AliveGuard)
 where
     Subsys: 'static + FnOnce() -> Fut + Send,
     Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
@@ -50,7 +92,7 @@ fixed facts:
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use tokio::time::{sleep, Duration};
+    use tokio::time::Duration;
 
     use super::*;
 
@@ -111,14 +153,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_subsystem_cancelled_immediately() {
+    async fn run_subsystem_cancelled_with_delay() {
         let (result, guard) = create_result_and_guard();
 
-        let _ = run_subsystem(|| async { std::future::pending().await }, guard);
+        let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
+
+        let timeout_result = tokio::time::timeout(
+            Duration::from_millis(100),
+            run_subsystem(
+                {
+                    || async move {
+                        drop_sender.send(()).await.unwrap();
+                        std::future::pending().await
+                    }
+                },
+                guard,
+            ),
+        )
+        .await;
+
+        assert!(timeout_result.is_err());
+        drop(timeout_result);
+
+        // Make sure we are executing the subsystem
+        let recv_result = tokio::time::timeout(Duration::from_millis(100), drop_receiver.recv())
+            .await
+            .unwrap();
+        assert!(recv_result.is_some());
+
+        // Make sure the subsystem got cancelled
+        let recv_result = tokio::time::timeout(Duration::from_millis(100), drop_receiver.recv())
+            .await
+            .unwrap();
+        assert!(recv_result.is_none());
 
         assert!(matches!(
             result.lock().unwrap().take(),
-            Some(StopReason::Error(_))
+            Some(StopReason::Cancelled)
+        ));
+    }
+
+    #[tokio::test]
+    async fn run_subsystem_cancelled_immediately() {
+        let (result, guard) = create_result_and_guard();
+
+        let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
+
+        let _ = run_subsystem(
+            {
+                || async move {
+                    drop_sender.send(()).await.unwrap();
+                    std::future::pending().await
+                }
+            },
+            guard,
+        );
+
+        // Make sure we are executing the subsystem
+        let recv_result = tokio::time::timeout(Duration::from_millis(100), drop_receiver.recv())
+            .await
+            .unwrap();
+        assert!(recv_result.is_none());
+
+        assert!(matches!(
+            result.lock().unwrap().take(),
+            Some(StopReason::Cancelled)
         ));
     }
 }

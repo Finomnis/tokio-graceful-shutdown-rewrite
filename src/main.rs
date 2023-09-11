@@ -5,7 +5,6 @@ use tokio::{
     time::{sleep, Duration},
 };
 
-mod guard;
 mod runner;
 mod subsystem;
 
