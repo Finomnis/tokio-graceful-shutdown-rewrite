@@ -1,16 +1,24 @@
-use std::sync::Arc;
+use std::{fmt::Debug, sync::Arc};
 
 use tokio::sync::watch;
 
-#[derive(Debug)]
 struct Inner {
     counter: watch::Sender<u32>,
     parent: Option<Arc<Inner>>,
 }
 
-#[derive(Debug)]
 struct JoinerToken {
     inner: Arc<Inner>,
+}
+
+impl Debug for JoinerToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "JoinerToken(children = {})",
+            *self.inner.counter.borrow()
+        )
+    }
 }
 
 impl JoinerToken {
@@ -141,5 +149,17 @@ mod tests {
                 assert_eq!(count, 0);
             }
         );
+    }
+
+    #[test]
+    fn debug_print() {
+        let root = JoinerToken::new();
+        assert_eq!(format!("{:?}", root), "JoinerToken(children = 0)");
+
+        let child1 = root.create_child_token();
+        assert_eq!(format!("{:?}", root), "JoinerToken(children = 1)");
+
+        let _child2 = child1.create_child_token();
+        assert_eq!(format!("{:?}", root), "JoinerToken(children = 2)");
     }
 }
