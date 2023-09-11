@@ -1,0 +1,16 @@
+[package]
+name = "tokio-graceful-shutdown-rewrite"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atomic = "0.6.0"
+atomic-option = "0.1.2"
+atomicbox = "0.4.0"
+tokio = { version = "1.32.0", features = ["full"] }
+tracing = "0.1.37"
+
+[dev-dependencies]
+raii-counter = "0.4.1"
