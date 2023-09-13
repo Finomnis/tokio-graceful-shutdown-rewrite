@@ -7,7 +7,7 @@ struct Inner {
     parent: Option<Arc<Inner>>,
 }
 
-struct JoinerToken {
+pub(crate) struct JoinerToken {
     inner: Arc<Inner>,
 }
 
@@ -55,6 +55,10 @@ impl JoinerToken {
             }),
         }
     }
+
+    pub(crate) fn count(&self) -> u32 {
+        *self.inner.counter.borrow()
+    }
 }
 
 impl Drop for JoinerToken {
@@ -73,41 +77,37 @@ mod tests {
 
     use super::*;
 
-    fn count(token: &JoinerToken) -> u32 {
-        *token.inner.counter.borrow()
-    }
-
     #[test]
     fn counters() {
         let root = JoinerToken::new();
-        assert_eq!(0, count(&root));
+        assert_eq!(0, root.count());
 
         let child1 = root.create_child_token();
-        assert_eq!(1, count(&root));
-        assert_eq!(0, count(&child1));
+        assert_eq!(1, root.count());
+        assert_eq!(0, child1.count());
 
         let child2 = child1.create_child_token();
-        assert_eq!(2, count(&root));
-        assert_eq!(1, count(&child1));
-        assert_eq!(0, count(&child2));
+        assert_eq!(2, root.count());
+        assert_eq!(1, child1.count());
+        assert_eq!(0, child2.count());
 
         let child3 = child1.create_child_token();
-        assert_eq!(3, count(&root));
-        assert_eq!(2, count(&child1));
-        assert_eq!(0, count(&child2));
-        assert_eq!(0, count(&child3));
+        assert_eq!(3, root.count());
+        assert_eq!(2, child1.count());
+        assert_eq!(0, child2.count());
+        assert_eq!(0, child3.count());
 
         drop(child1);
-        assert_eq!(2, count(&root));
-        assert_eq!(0, count(&child2));
-        assert_eq!(0, count(&child3));
+        assert_eq!(2, root.count());
+        assert_eq!(0, child2.count());
+        assert_eq!(0, child3.count());
 
         drop(child2);
-        assert_eq!(1, count(&root));
-        assert_eq!(0, count(&child3));
+        assert_eq!(1, root.count());
+        assert_eq!(0, child3.count());
 
         drop(child3);
-        assert_eq!(0, count(&root));
+        assert_eq!(0, root.count());
     }
 
     #[tokio::test]
@@ -126,7 +126,7 @@ mod tests {
                 timeout(Duration::from_millis(500), root.join_children())
                     .await
                     .unwrap();
-                set_finished.send(count(&root)).unwrap();
+                set_finished.send(root.count()).unwrap();
             },
             async {
                 sleep(Duration::from_millis(50)).await;
