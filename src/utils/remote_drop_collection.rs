@@ -27,7 +27,7 @@ impl<T> RemotelyDroppableItems<T> {
         }
     }
 
-    pub(crate) fn insert(&self, item: T) -> RemoteDropGuard<T> {
+    pub(crate) fn insert(&self, item: T) -> RemoteDrop<T> {
         let mut items = self.items.lock().unwrap();
 
         let offset = Arc::new(AtomicUsize::new(items.len()));
@@ -38,7 +38,7 @@ impl<T> RemotelyDroppableItems<T> {
             offset,
         });
 
-        RemoteDropGuard {
+        RemoteDrop {
             data: Arc::downgrade(&self.items),
             offset: weak_offset,
         }
@@ -46,7 +46,7 @@ impl<T> RemotelyDroppableItems<T> {
 }
 
 /// Drops its referenced item when dropped
-pub(crate) struct RemoteDropGuard<T> {
+pub(crate) struct RemoteDrop<T> {
     // Both weak.
     // If data is gone, then our item collection dropped.
     data: Weak<Mutex<Vec<RemotelyDroppableItem<T>>>>,
@@ -55,7 +55,7 @@ pub(crate) struct RemoteDropGuard<T> {
     offset: Weak<AtomicUsize>,
 }
 
-impl<T> Drop for RemoteDropGuard<T> {
+impl<T> Drop for RemoteDrop<T> {
     fn drop(&mut self) {
         if let Some(data) = self.data.upgrade() {
             // Important: lock first, then read the offset.
