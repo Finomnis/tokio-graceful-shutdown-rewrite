@@ -1,2 +1,4 @@
 mod joiner_token;
-mod remote_drop_collection;
+pub(crate) use joiner_token::JoinerToken;
+
+pub(crate) mod remote_drop_collection;

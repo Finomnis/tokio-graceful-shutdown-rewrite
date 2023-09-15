@@ -1,12 +1,12 @@
 use crate::StopReason;
 
 pub(crate) struct AliveGuard {
-    finished_callback: Option<Box<dyn FnOnce(StopReason)>>,
-    cancelled_callback: Option<Box<dyn FnOnce()>>,
+    finished_callback: Option<Box<dyn FnOnce(StopReason) + Send>>,
+    cancelled_callback: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl AliveGuard {
-    pub(crate) fn new(finished_callback: impl FnOnce(StopReason) + 'static) -> Self {
+    pub(crate) fn new(finished_callback: impl FnOnce(StopReason) + 'static + Send) -> Self {
         Self {
             finished_callback: Some(Box::new(finished_callback)),
             cancelled_callback: None,
@@ -20,7 +20,7 @@ impl AliveGuard {
         finished_callback(reason);
     }
 
-    pub(crate) fn on_cancel(&mut self, cancelled_callback: impl FnOnce() + 'static) {
+    pub(crate) fn on_cancel(&mut self, cancelled_callback: impl FnOnce() + 'static + Send) {
         assert!(self.cancelled_callback.is_none());
         self.cancelled_callback = Some(Box::new(cancelled_callback));
     }

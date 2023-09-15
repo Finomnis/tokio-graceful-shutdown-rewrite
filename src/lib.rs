@@ -1,5 +1,6 @@
 #![deny(unreachable_pub)]
 #![deny(unsafe_code)]
+#![allow(unused)] // TODO: remove this.
 
 mod runner;
 mod subsystem;
