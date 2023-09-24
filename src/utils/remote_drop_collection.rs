@@ -1,6 +1,7 @@
-use std::sync::{atomic::AtomicUsize, Arc, Mutex, Weak};
-
-use atomic::Ordering;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex, Weak,
+};
 
 struct RemotelyDroppableItem<T> {
     _item: T,
@@ -82,23 +83,23 @@ impl<T> Drop for RemoteDrop<T> {
 mod tests {
 
     use super::*;
-    use crate::utils::joiner_token::JoinerToken;
+    use crate::utils::JoinerToken;
 
     #[test]
     fn insert_and_drop() {
         let items = RemotelyDroppableItems::new();
 
-        let count1 = JoinerToken::new();
-        let count2 = JoinerToken::new();
+        let count1 = JoinerToken::new(|_| None);
+        let count2 = JoinerToken::new(|_| None);
 
         assert_eq!(0, count1.count());
         assert_eq!(0, count2.count());
 
-        let _token1 = items.insert(count1.create_child_token());
+        let _token1 = items.insert(count1.create_child_token(|_| None));
         assert_eq!(1, count1.count());
         assert_eq!(0, count2.count());
 
-        let _token2 = items.insert(count2.create_child_token());
+        let _token2 = items.insert(count2.create_child_token(|_| None));
         assert_eq!(1, count1.count());
         assert_eq!(1, count2.count());
 
@@ -111,15 +112,15 @@ mod tests {
     fn drop_token() {
         let items = RemotelyDroppableItems::new();
 
-        let count1 = JoinerToken::new();
-        let count2 = JoinerToken::new();
-        let count3 = JoinerToken::new();
-        let count4 = JoinerToken::new();
+        let count1 = JoinerToken::new(|_| None);
+        let count2 = JoinerToken::new(|_| None);
+        let count3 = JoinerToken::new(|_| None);
+        let count4 = JoinerToken::new(|_| None);
 
-        let token1 = items.insert(count1.create_child_token());
-        let token2 = items.insert(count2.create_child_token());
-        let token3 = items.insert(count3.create_child_token());
-        let token4 = items.insert(count4.create_child_token());
+        let token1 = items.insert(count1.create_child_token(|_| None));
+        let token2 = items.insert(count2.create_child_token(|_| None));
+        let token3 = items.insert(count3.create_child_token(|_| None));
+        let token4 = items.insert(count4.create_child_token(|_| None));
         assert_eq!(1, count1.count());
         assert_eq!(1, count2.count());
         assert_eq!(1, count3.count());

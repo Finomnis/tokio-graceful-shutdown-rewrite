@@ -36,7 +36,7 @@ Open question: How to deal with errors?
         - pass further up
         - Ignore
         - shutdown self and children
-        - shutdown self and children
+    - Probably a mechanism that will be inside of the joiner_token
 
 Open question: Ownership?
     - Parents should own children
@@ -45,3 +45,4 @@ Open question: Ownership?
         - The solution *might* be: The joiner_token removes them. That way, there is no recursive dependency.
         - Might need a fancy data structure that allows efficient RAII based object tracking
             - solved! (?)
+    -> Implemented in remote_drop_collection

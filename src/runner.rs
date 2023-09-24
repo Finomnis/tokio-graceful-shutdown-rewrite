@@ -260,11 +260,11 @@ mod tests {
         async fn cancelled_immediately() {
             let (mut result, guard) = create_result_and_guard();
 
-            let mut joiner_token = JoinerToken::new();
+            let mut joiner_token = JoinerToken::new(|_| None);
 
             let _ = SubsystemRunner::new(
                 {
-                    let joiner_token = joiner_token.create_child_token();
+                    let joiner_token = joiner_token.create_child_token(|_| None);
                     || async move {
                         let joiner_token = joiner_token;
                         std::future::pending().await
