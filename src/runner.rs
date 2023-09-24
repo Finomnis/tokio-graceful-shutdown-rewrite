@@ -73,7 +73,8 @@ mod tests {
     fn create_result_and_guard() -> (oneshot::Receiver<StopReason>, AliveGuard) {
         let (sender, receiver) = oneshot::channel();
 
-        let guard = AliveGuard::new({
+        let guard = AliveGuard::new();
+        guard.on_finished({
             move |r| {
                 sender.send(r).unwrap();
             }
@@ -264,7 +265,7 @@ mod tests {
 
             let _ = SubsystemRunner::new(
                 {
-                    let joiner_token = joiner_token.create_child_token(|_| None);
+                    let joiner_token = joiner_token.child_token(|_| None);
                     || async move {
                         let joiner_token = joiner_token;
                         std::future::pending().await

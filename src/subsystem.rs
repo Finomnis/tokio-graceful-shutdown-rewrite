@@ -16,7 +16,7 @@ impl SubSystem {
         Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
     {
         Self {
-            runner: SubsystemRunner::new(subsystem, AliveGuard::new(|_| {})),
+            runner: SubsystemRunner::new(subsystem, AliveGuard::new()),
         }
     }
 }

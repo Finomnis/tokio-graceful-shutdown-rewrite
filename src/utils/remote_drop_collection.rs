@@ -95,11 +95,11 @@ mod tests {
         assert_eq!(0, count1.count());
         assert_eq!(0, count2.count());
 
-        let _token1 = items.insert(count1.create_child_token(|_| None));
+        let _token1 = items.insert(count1.child_token(|_| None));
         assert_eq!(1, count1.count());
         assert_eq!(0, count2.count());
 
-        let _token2 = items.insert(count2.create_child_token(|_| None));
+        let _token2 = items.insert(count2.child_token(|_| None));
         assert_eq!(1, count1.count());
         assert_eq!(1, count2.count());
 
@@ -117,10 +117,10 @@ mod tests {
         let count3 = JoinerToken::new(|_| None);
         let count4 = JoinerToken::new(|_| None);
 
-        let token1 = items.insert(count1.create_child_token(|_| None));
-        let token2 = items.insert(count2.create_child_token(|_| None));
-        let token3 = items.insert(count3.create_child_token(|_| None));
-        let token4 = items.insert(count4.create_child_token(|_| None));
+        let token1 = items.insert(count1.child_token(|_| None));
+        let token2 = items.insert(count2.child_token(|_| None));
+        let token3 = items.insert(count3.child_token(|_| None));
+        let token4 = items.insert(count4.child_token(|_| None));
         assert_eq!(1, count1.count());
         assert_eq!(1, count2.count());
         assert_eq!(1, count3.count());

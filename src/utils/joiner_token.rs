@@ -52,7 +52,7 @@ impl JoinerToken {
         let _ = subscriber.wait_for(|val| *val == 0).await;
     }
 
-    pub(crate) fn create_child_token(
+    pub(crate) fn child_token(
         &self,
         on_error: impl Fn(StopReason) -> Option<StopReason> + Sync + Send + 'static,
     ) -> Self {
@@ -108,24 +108,26 @@ impl Drop for JoinerToken {
 #[cfg(test)]
 mod tests {
     use tokio::time::{sleep, timeout, Duration};
+    use tracing_test::traced_test;
 
     use super::*;
 
     #[test]
+    #[traced_test]
     fn counters() {
         let root = JoinerToken::new(|_| None);
         assert_eq!(0, root.count());
 
-        let child1 = root.create_child_token(|_| None);
+        let child1 = root.child_token(|_| None);
         assert_eq!(1, root.count());
         assert_eq!(0, child1.count());
 
-        let child2 = child1.create_child_token(|_| None);
+        let child2 = child1.child_token(|_| None);
         assert_eq!(2, root.count());
         assert_eq!(1, child1.count());
         assert_eq!(0, child2.count());
 
-        let child3 = child1.create_child_token(|_| None);
+        let child3 = child1.child_token(|_| None);
         assert_eq!(3, root.count());
         assert_eq!(2, child1.count());
         assert_eq!(0, child2.count());
@@ -145,14 +147,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn join() {
         let superroot = JoinerToken::new(|_| None);
 
-        let mut root = superroot.create_child_token(|_| None);
+        let mut root = superroot.child_token(|_| None);
 
-        let child1 = root.create_child_token(|_| None);
-        let child2 = child1.create_child_token(|_| None);
-        let child3 = child1.create_child_token(|_| None);
+        let child1 = root.child_token(|_| None);
+        let child2 = child1.child_token(|_| None);
+        let child3 = child1.child_token(|_| None);
 
         let (set_finished, mut finished) = tokio::sync::oneshot::channel();
         tokio::join!(
@@ -190,10 +193,10 @@ mod tests {
         let root = JoinerToken::new(|_| None);
         assert_eq!(format!("{:?}", root), "JoinerToken(children = 0)");
 
-        let child1 = root.create_child_token(|_| None);
+        let child1 = root.child_token(|_| None);
         assert_eq!(format!("{:?}", root), "JoinerToken(children = 1)");
 
-        let _child2 = child1.create_child_token(|_| None);
+        let _child2 = child1.child_token(|_| None);
         assert_eq!(format!("{:?}", root), "JoinerToken(children = 2)");
     }
 }
