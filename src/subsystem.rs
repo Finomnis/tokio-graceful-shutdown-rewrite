@@ -15,9 +15,10 @@ impl SubSystem {
         Subsys: 'static + FnOnce() -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
     {
-        Self {
-            runner: SubsystemRunner::new(subsystem, AliveGuard::new()),
-        }
+        todo!();
+        // Self {
+        //     runner: SubsystemRunner::new(subsystem, AliveGuard::new()),
+        // }
     }
 }
 

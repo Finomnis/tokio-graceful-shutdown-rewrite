@@ -6,9 +6,9 @@
 //! Further, everything in here reacts properly to being dropped, including the `AliveGuard` (propagating `StopReason::Cancel` in that case)
 //! and runner itself, who cancels the subsystem on drop.
 
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
-use crate::{BoxedError, StopReason};
+use crate::{BoxedError, StopReason, SubsystemHandle};
 
 mod alive_guard;
 pub(crate) use self::alive_guard::AliveGuard;
@@ -18,12 +18,17 @@ pub(crate) struct SubsystemRunner {
 }
 
 impl SubsystemRunner {
-    pub(crate) fn new<Fut, Subsys>(subsystem: Subsys, mut guard: AliveGuard) -> Self
+    pub(crate) fn new<Fut, Subsys>(
+        subsystem: Subsys,
+        subsystem_handle: SubsystemHandle,
+        mut guard: AliveGuard,
+    ) -> Self
     where
-        Subsys: 'static + FnOnce() -> Fut + Send,
+        Subsys: 'static + FnOnce(SubsystemHandle) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
     {
-        let aborthandle = tokio::spawn(run_subsystem(subsystem, guard)).abort_handle();
+        let aborthandle =
+            tokio::spawn(run_subsystem(subsystem, subsystem_handle, guard)).abort_handle();
         SubsystemRunner { aborthandle }
     }
 }
@@ -34,12 +39,17 @@ impl Drop for SubsystemRunner {
     }
 }
 
-async fn run_subsystem<Fut, Subsys>(subsystem: Subsys, mut guard: AliveGuard)
-where
-    Subsys: 'static + FnOnce() -> Fut,
+async fn run_subsystem<Fut, Subsys>(
+    subsystem: Subsys,
+    mut subsystem_handle: SubsystemHandle,
+    mut guard: AliveGuard,
+) where
+    Subsys: 'static + FnOnce(SubsystemHandle) -> Fut + Send,
     Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
 {
-    let join_handle = tokio::spawn(subsystem());
+    let mut redirected_subsystem_handle = subsystem_handle.delayed_clone();
+
+    let join_handle = tokio::spawn({ async move { subsystem(subsystem_handle).await } });
 
     // Abort on drop
     guard.on_cancel({
@@ -57,6 +67,24 @@ where
     };
 
     guard.subsystem_ended(result);
+
+    // Retrieve the handle that was passed into the subsystem.
+    // Originally it was intended to pass the handle as reference, but due
+    // to complications (https://stackoverflow.com/questions/77172947/async-lifetime-issues-of-pass-by-reference-parameters)
+    // it was decided to pass ownership instead.
+    //
+    // It is still important that the handle does not leak out of the subsystem.
+    let mut subsystem_handle = match redirected_subsystem_handle.try_recv() {
+        Ok(s) => s,
+        Err(_) => panic!("The SubsystemHandle object must not be leaked out of the subsystem!"),
+    };
+
+    // Wait for children to finish before we destroy the `SubsystemHandle` object.
+    // Otherwise the children would be cancelled immediately.
+    //
+    // This is the main mechanism that forwards a cancellation to all the children.
+    subsystem_handle.wait_for_children().await;
+    drop(subsystem_handle);
 }
 
 #[cfg(test)]
@@ -69,6 +97,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::subsystem_handle::root_handle;
 
     fn create_result_and_guard() -> (oneshot::Receiver<StopReason>, AliveGuard) {
         let (sender, receiver) = oneshot::channel();
@@ -84,13 +113,19 @@ mod tests {
     }
 
     mod run_subsystem {
+
         use super::*;
 
         #[tokio::test]
         async fn finish() {
             let (mut result, guard) = create_result_and_guard();
 
-            run_subsystem(|| async { Result::<(), BoxedError>::Ok(()) }, guard).await;
+            run_subsystem(
+                |_| async { Result::<(), BoxedError>::Ok(()) },
+                root_handle(),
+                guard,
+            )
+            .await;
 
             assert!(matches!(result.try_recv(), Ok(StopReason::Finish)));
         }
@@ -100,9 +135,10 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             run_subsystem(
-                || async {
+                |_| async {
                     panic!();
                 },
+                root_handle(),
                 guard,
             )
             .await;
@@ -114,7 +150,12 @@ mod tests {
         async fn error() {
             let (mut result, guard) = create_result_and_guard();
 
-            run_subsystem(|| async { Err(String::from("").into()) }, guard).await;
+            run_subsystem(
+                |_| async { Err(String::from("").into()) },
+                root_handle(),
+                guard,
+            )
+            .await;
 
             assert!(matches!(result.try_recv(), Ok(StopReason::Error(_))));
         }
@@ -128,12 +169,11 @@ mod tests {
             let timeout_result = timeout(
                 Duration::from_millis(100),
                 run_subsystem(
-                    {
-                        || async move {
-                            drop_sender.send(()).await.unwrap();
-                            std::future::pending().await
-                        }
+                    |_| async move {
+                        drop_sender.send(()).await.unwrap();
+                        std::future::pending().await
                     },
+                    root_handle(),
                     guard,
                 ),
             )
@@ -164,12 +204,11 @@ mod tests {
             let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
             let _ = run_subsystem(
-                {
-                    || async move {
-                        drop_sender.send(()).await.unwrap();
-                        std::future::pending().await
-                    }
+                |_| async move {
+                    drop_sender.send(()).await.unwrap();
+                    std::future::pending().await
                 },
+                root_handle(),
                 guard,
             );
 
@@ -192,7 +231,11 @@ mod tests {
         async fn finish() {
             let (mut result, guard) = create_result_and_guard();
 
-            let runner = SubsystemRunner::new(|| async { Result::<(), BoxedError>::Ok(()) }, guard);
+            let runner = SubsystemRunner::new(
+                |_| async { Result::<(), BoxedError>::Ok(()) },
+                root_handle(),
+                guard,
+            );
 
             let result = timeout(Duration::from_millis(200), result).await.unwrap();
             assert!(matches!(result, Ok(StopReason::Finish)));
@@ -203,9 +246,10 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             let runner = SubsystemRunner::new(
-                || async {
+                |_| async {
                     panic!();
                 },
+                root_handle(),
                 guard,
             );
 
@@ -217,7 +261,11 @@ mod tests {
         async fn error() {
             let (mut result, guard) = create_result_and_guard();
 
-            let runner = SubsystemRunner::new(|| async { Err(String::from("").into()) }, guard);
+            let runner = SubsystemRunner::new(
+                |_| async { Err(String::from("").into()) },
+                root_handle(),
+                guard,
+            );
 
             let result = timeout(Duration::from_millis(200), result).await.unwrap();
             assert!(matches!(result, Ok(StopReason::Error(_))));
@@ -230,12 +278,11 @@ mod tests {
             let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
             let runner = SubsystemRunner::new(
-                {
-                    || async move {
-                        drop_sender.send(()).await.unwrap();
-                        std::future::pending().await
-                    }
+                |_| async move {
+                    drop_sender.send(()).await.unwrap();
+                    std::future::pending().await
                 },
+                root_handle(),
                 guard,
             );
 
@@ -266,11 +313,12 @@ mod tests {
             let _ = SubsystemRunner::new(
                 {
                     let joiner_token = joiner_token.child_token(|_| None);
-                    || async move {
+                    |_| async move {
                         let joiner_token = joiner_token;
                         std::future::pending().await
                     }
                 },
+                root_handle(),
                 guard,
             );
 
