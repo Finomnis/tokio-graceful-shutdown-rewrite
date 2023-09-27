@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, mem::ManuallyDrop, sync::Arc};
 
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -9,13 +9,15 @@ use crate::{
     BoxedError,
 };
 
-struct Inner {}
-
-// All the things needed to manage nested subsystems and wait for cancellation
-pub struct SubsystemHandle {
+struct Inner {
     cancellation_token: CancellationToken,
     joiner_token: JoinerToken,
     children: RemotelyDroppableItems<SubsystemRunner>,
+}
+
+// All the things needed to manage nested subsystems and wait for cancellation
+pub struct SubsystemHandle {
+    inner: ManuallyDrop<Inner>,
     // When dropped, redirect Self into this channel.
     // Required as a workaround for https://stackoverflow.com/questions/77172947/async-lifetime-issues-of-pass-by-reference-parameters.
     drop_redirect: Option<oneshot::Sender<SubsystemHandle>>,
@@ -30,11 +32,13 @@ impl SubsystemHandle {
         let alive_guard = AliveGuard::new();
 
         let child_handle = SubsystemHandle {
-            cancellation_token: self.cancellation_token.child_token(),
-            joiner_token: self.joiner_token.child_token(
-                |e| Some(e), /* Forward error upwards. TODO: implement handling */
-            ),
-            children: RemotelyDroppableItems::new(),
+            inner: ManuallyDrop::new(Inner {
+                cancellation_token: self.inner.cancellation_token.child_token(),
+                joiner_token: self.inner.joiner_token.child_token(
+                    |e| Some(e), /* Forward error upwards. TODO: implement handling */
+                ),
+                children: RemotelyDroppableItems::new(),
+            }),
             drop_redirect: None,
         };
 
@@ -46,12 +50,12 @@ impl SubsystemHandle {
         // If the subsystem ends before `on_finished` was able to be called, nothing bad happens.
         // alive_guard will keep the guard alive and the callback will only be called inside of
         // the guard's drop() implementation.
-        let child_dropper = self.children.insert(runner);
+        let child_dropper = self.inner.children.insert(runner);
         alive_guard.on_finished(|d| drop(child_dropper));
     }
 
     pub async fn wait_for_children(&mut self) {
-        self.joiner_token.join_children().await
+        self.inner.joiner_token.join_children().await
     }
 
     // For internal use only - should never be used by users.
@@ -68,23 +72,36 @@ impl SubsystemHandle {
 
 impl Drop for SubsystemHandle {
     fn drop(&mut self) {
+        // SAFETY: This is how ManuallyDrop is meant to be used.
+        // `self.inner` won't ever be used again because `self` will be gone after this
+        // function is finished.
+        // This takes the `self.inner` object and makes it droppable again.
+        //
+        // This workaround is required to take ownership for the `self.drop_redirect` channel.
+        let inner = unsafe { ManuallyDrop::take(&mut self.inner) };
+
         if let Some(redirect) = self.drop_redirect.take() {
-            let mut handle = root_handle();
-            std::mem::swap(&mut handle, self);
+            let redirected_self = Self {
+                inner: ManuallyDrop::new(inner),
+                drop_redirect: None,
+            };
+
             // ignore error; an error would indicate that there is no receiver.
             // in that case, do nothing.
-            let _ = redirect.send(handle);
+            let _ = redirect.send(redirected_self);
         }
     }
 }
 
 pub(crate) fn root_handle() -> SubsystemHandle {
     SubsystemHandle {
-        cancellation_token: CancellationToken::new(),
-        joiner_token: JoinerToken::new(
-            |e| panic!("Uncaught error: {:?}", e), /* Panic. TODO: implement proper handling */
-        ),
-        children: RemotelyDroppableItems::new(),
+        inner: ManuallyDrop::new(Inner {
+            cancellation_token: CancellationToken::new(),
+            joiner_token: JoinerToken::new(
+                |e| panic!("Uncaught error: {:?}", e), /* Panic. TODO: implement proper handling */
+            ),
+            children: RemotelyDroppableItems::new(),
+        }),
         drop_redirect: None,
     }
 }
