@@ -34,9 +34,13 @@ impl SubsystemHandle {
         let child_handle = SubsystemHandle {
             inner: ManuallyDrop::new(Inner {
                 cancellation_token: self.inner.cancellation_token.child_token(),
-                joiner_token: self.inner.joiner_token.child_token(
-                    |e| Some(e), /* Forward error upwards. TODO: implement handling */
-                ),
+                joiner_token: self
+                    .inner
+                    .joiner_token
+                    .child_token(
+                        |e| Some(e), /* Forward error upwards. TODO: implement handling */
+                    )
+                    .0,
                 children: RemotelyDroppableItems::new(),
             }),
             drop_redirect: None,
@@ -99,7 +103,8 @@ pub(crate) fn root_handle() -> SubsystemHandle {
             cancellation_token: CancellationToken::new(),
             joiner_token: JoinerToken::new(
                 |e| panic!("Uncaught error: {:?}", e), /* Panic. TODO: implement proper handling */
-            ),
+            )
+            .0,
             children: RemotelyDroppableItems::new(),
         }),
         drop_redirect: None,

@@ -1,11 +1,14 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{
+    fmt::Debug,
+    sync::{Arc, Weak},
+};
 
 use tokio::sync::watch;
 
 use crate::{BoxedError, StopReason};
 
 struct Inner {
-    counter: watch::Sender<u32>,
+    counter: watch::Sender<(bool, u32)>,
     parent: Option<Arc<Inner>>,
     on_error: Box<dyn Fn(StopReason) -> Option<StopReason> + Sync + Send>,
 }
@@ -14,13 +17,33 @@ pub(crate) struct JoinerToken {
     inner: Arc<Inner>,
 }
 
+pub(crate) struct JoinerTokenRef {
+    inner: Weak<Inner>,
+}
+
 impl Debug for JoinerToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "JoinerToken(children = {})",
-            *self.inner.counter.borrow()
+            self.inner.counter.borrow().1
         )
+    }
+}
+
+impl Debug for JoinerTokenRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(inner) = self.inner.upgrade() {
+            let counter = *inner.counter.borrow();
+            drop(inner);
+            write!(
+                f,
+                "JoinerTokenRef(alive = {}, children = {})",
+                counter.0, counter.1
+            )
+        } else {
+            write!(f, "JoinerTokenRef(dead)")
+        }
     }
 }
 
@@ -32,14 +55,18 @@ impl JoinerToken {
     /// If it returns `Some`, the error will get passed on to its parent.
     pub(crate) fn new(
         on_error: impl Fn(StopReason) -> Option<StopReason> + Sync + Send + 'static,
-    ) -> Self {
-        Self {
-            inner: Arc::new(Inner {
-                counter: watch::channel(0).0,
-                parent: None,
-                on_error: Box::new(on_error),
-            }),
-        }
+    ) -> (Self, JoinerTokenRef) {
+        let inner = Arc::new(Inner {
+            counter: watch::channel((true, 0)).0,
+            parent: None,
+            on_error: Box::new(on_error),
+        });
+
+        let weak_ref = JoinerTokenRef {
+            inner: Arc::downgrade(&inner),
+        };
+
+        (Self { inner }, weak_ref)
     }
 
     // Requires `mut` access to prevent children from being spawned
@@ -49,30 +76,41 @@ impl JoinerToken {
 
         // Ignore errors; if the channel got closed, that definitely means
         // no more children exist.
-        let _ = subscriber.wait_for(|val| *val == 0).await;
+        let _ = subscriber
+            .wait_for(|(alive, children)| *children == 0)
+            .await;
     }
 
     pub(crate) fn child_token(
         &self,
         on_error: impl Fn(StopReason) -> Option<StopReason> + Sync + Send + 'static,
-    ) -> Self {
+    ) -> (Self, JoinerTokenRef) {
         let mut maybe_parent = Some(&self.inner);
         while let Some(parent) = maybe_parent {
-            parent.counter.send_modify(|val| *val += 1);
+            parent
+                .counter
+                .send_modify(|(alive, children)| *children += 1);
             maybe_parent = parent.parent.as_ref();
         }
 
-        Self {
-            inner: Arc::new(Inner {
-                counter: watch::channel(0).0,
-                parent: Some(Arc::clone(&self.inner)),
-                on_error: Box::new(on_error),
-            }),
-        }
+        let inner = Arc::new(Inner {
+            counter: watch::channel((true, 0)).0,
+            parent: Some(Arc::clone(&self.inner)),
+            on_error: Box::new(on_error),
+        });
+
+        let weak_ref = JoinerTokenRef {
+            inner: Arc::downgrade(&inner),
+        };
+
+        (Self { inner }, weak_ref)
     }
 
     pub(crate) fn count(&self) -> u32 {
-        *self.inner.counter.borrow()
+        self.inner.counter.borrow().1
+    }
+    pub(crate) fn alive(&self) -> bool {
+        self.inner.counter.borrow().0
     }
 
     pub(crate) fn raise_failure(&self, mut stop_reason: StopReason) {
@@ -95,11 +133,31 @@ impl JoinerToken {
     }
 }
 
+impl JoinerTokenRef {
+    pub(crate) async fn join(self) {
+        if let Some(inner) = self.inner.upgrade() {
+            let mut subscriber = inner.counter.subscribe();
+
+            // Ignore errors; if the channel got closed, that definitely means
+            // the token and all its children got dropped.
+            let _ = subscriber
+                .wait_for(|&(alive, children)| !alive && children == 0)
+                .await;
+        }
+    }
+}
+
 impl Drop for JoinerToken {
     fn drop(&mut self) {
+        self.inner
+            .counter
+            .send_modify(|(alive, children)| *alive = false);
+
         let mut maybe_parent = self.inner.parent.as_ref();
         while let Some(parent) = maybe_parent {
-            parent.counter.send_modify(|val| *val -= 1);
+            parent
+                .counter
+                .send_modify(|(alive, children)| *children -= 1);
             maybe_parent = parent.parent.as_ref();
         }
     }
@@ -115,19 +173,19 @@ mod tests {
     #[test]
     #[traced_test]
     fn counters() {
-        let root = JoinerToken::new(|_| None);
+        let (root, _) = JoinerToken::new(|_| None);
         assert_eq!(0, root.count());
 
-        let child1 = root.child_token(|_| None);
+        let (child1, _) = root.child_token(|_| None);
         assert_eq!(1, root.count());
         assert_eq!(0, child1.count());
 
-        let child2 = child1.child_token(|_| None);
+        let (child2, _) = child1.child_token(|_| None);
         assert_eq!(2, root.count());
         assert_eq!(1, child1.count());
         assert_eq!(0, child2.count());
 
-        let child3 = child1.child_token(|_| None);
+        let (child3, _) = child1.child_token(|_| None);
         assert_eq!(3, root.count());
         assert_eq!(2, child1.count());
         assert_eq!(0, child2.count());
@@ -149,13 +207,13 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn join() {
-        let superroot = JoinerToken::new(|_| None);
+        let (superroot, _) = JoinerToken::new(|_| None);
 
-        let mut root = superroot.child_token(|_| None);
+        let (mut root, _) = superroot.child_token(|_| None);
 
-        let child1 = root.child_token(|_| None);
-        let child2 = child1.child_token(|_| None);
-        let child3 = child1.child_token(|_| None);
+        let (child1, _) = root.child_token(|_| None);
+        let (child2, _) = child1.child_token(|_| None);
+        let (child3, _) = child1.child_token(|_| None);
 
         let (set_finished, mut finished) = tokio::sync::oneshot::channel();
         tokio::join!(
@@ -188,15 +246,77 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[traced_test]
+    async fn join_through_ref() {
+        let (root, joiner) = JoinerToken::new(|_| None);
+
+        let (child1, _) = root.child_token(|_| None);
+        let (child2, _) = child1.child_token(|_| None);
+
+        let (set_finished, mut finished) = tokio::sync::oneshot::channel();
+        tokio::join!(
+            async {
+                timeout(Duration::from_millis(500), joiner.join())
+                    .await
+                    .unwrap();
+                set_finished.send(()).unwrap();
+            },
+            async {
+                sleep(Duration::from_millis(50)).await;
+                assert!(finished.try_recv().is_err());
+
+                drop(child1);
+                sleep(Duration::from_millis(50)).await;
+                assert!(finished.try_recv().is_err());
+
+                drop(root);
+                sleep(Duration::from_millis(50)).await;
+                assert!(finished.try_recv().is_err());
+
+                drop(child2);
+                sleep(Duration::from_millis(50)).await;
+                timeout(Duration::from_millis(50), finished)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            }
+        );
+    }
+
     #[test]
     fn debug_print() {
-        let root = JoinerToken::new(|_| None);
+        let (root, _) = JoinerToken::new(|_| None);
         assert_eq!(format!("{:?}", root), "JoinerToken(children = 0)");
 
-        let child1 = root.child_token(|_| None);
+        let (child1, _) = root.child_token(|_| None);
         assert_eq!(format!("{:?}", root), "JoinerToken(children = 1)");
 
-        let _child2 = child1.child_token(|_| None);
+        let (_child2, _) = child1.child_token(|_| None);
         assert_eq!(format!("{:?}", root), "JoinerToken(children = 2)");
+    }
+
+    #[test]
+    fn debug_print_ref() {
+        let (root, root_ref) = JoinerToken::new(|_| None);
+        assert_eq!(
+            format!("{:?}", root_ref),
+            "JoinerTokenRef(alive = true, children = 0)"
+        );
+
+        let (child1, _) = root.child_token(|_| None);
+        assert_eq!(
+            format!("{:?}", root_ref),
+            "JoinerTokenRef(alive = true, children = 1)"
+        );
+
+        drop(root);
+        assert_eq!(
+            format!("{:?}", root_ref),
+            "JoinerTokenRef(alive = false, children = 1)"
+        );
+
+        drop(child1);
+        assert_eq!(format!("{:?}", root_ref), "JoinerTokenRef(dead)");
     }
 }
