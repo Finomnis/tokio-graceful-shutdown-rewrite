@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     runner::{AliveGuard, SubsystemRunner},
     utils::{remote_drop_collection::RemotelyDroppableItems, JoinerToken},
-    BoxedError,
+    BoxedError, NestedSubsystem,
 };
 
 struct Inner {
@@ -24,23 +24,21 @@ pub struct SubsystemHandle {
 }
 
 impl SubsystemHandle {
-    pub fn start<Fut, Subsys>(&self, name: &str, subsystem: Subsys)
+    pub fn start<Fut, Subsys>(&self, name: &str, subsystem: Subsys) -> NestedSubsystem
     where
         Subsys: 'static + FnOnce(SubsystemHandle) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
     {
         let alive_guard = AliveGuard::new();
 
+        let (joiner_token, joiner_token_ref) = self.inner.joiner_token.child_token(
+            |e| Some(e), /* Forward error upwards. TODO: implement handling */
+        );
+
         let child_handle = SubsystemHandle {
             inner: ManuallyDrop::new(Inner {
                 cancellation_token: self.inner.cancellation_token.child_token(),
-                joiner_token: self
-                    .inner
-                    .joiner_token
-                    .child_token(
-                        |e| Some(e), /* Forward error upwards. TODO: implement handling */
-                    )
-                    .0,
+                joiner_token,
                 children: RemotelyDroppableItems::new(),
             }),
             drop_redirect: None,
@@ -56,6 +54,10 @@ impl SubsystemHandle {
         // the guard's drop() implementation.
         let child_dropper = self.inner.children.insert(runner);
         alive_guard.on_finished(|d| drop(child_dropper));
+
+        NestedSubsystem {
+            joiner: joiner_token_ref,
+        }
     }
 
     pub async fn wait_for_children(&mut self) {
@@ -71,6 +73,18 @@ impl SubsystemHandle {
         assert!(previous.is_none());
 
         receiver
+    }
+
+    pub fn initiate_shutdown(&self) {
+        self.inner.cancellation_token.cancel();
+    }
+
+    pub async fn on_shutdown_requested(&self) {
+        self.inner.cancellation_token.cancelled().await
+    }
+
+    pub(crate) fn get_cancellation_token(&self) -> CancellationToken {
+        self.inner.cancellation_token.clone()
     }
 }
 

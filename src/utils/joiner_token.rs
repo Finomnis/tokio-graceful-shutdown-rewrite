@@ -134,7 +134,7 @@ impl JoinerToken {
 }
 
 impl JoinerTokenRef {
-    pub(crate) async fn join(self) {
+    pub(crate) async fn join(&self) {
         if let Some(inner) = self.inner.upgrade() {
             let mut subscriber = inner.counter.subscribe();
 

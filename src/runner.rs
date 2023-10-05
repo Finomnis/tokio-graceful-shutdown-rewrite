@@ -97,7 +97,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::subsystem_handle::root_handle;
+    use crate::subsystem::root_handle;
 
     fn create_result_and_guard() -> (oneshot::Receiver<StopReason>, AliveGuard) {
         let (sender, receiver) = oneshot::channel();
