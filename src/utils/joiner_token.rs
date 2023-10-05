@@ -5,7 +5,7 @@ use std::{
 
 use tokio::sync::watch;
 
-use crate::{BoxedError, StopReason};
+use crate::StopReason;
 
 struct Inner {
     counter: watch::Sender<(bool, u32)>,

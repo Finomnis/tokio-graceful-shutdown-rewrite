@@ -21,7 +21,6 @@ async fn normal_shutdown() {
 
     let toplevel = Toplevel::new(move |s: SubsystemHandle| async move {
         s.start("subsys", subsystem);
-        Ok(())
     });
     let shutdown_token = toplevel.get_shutdown_token().clone();
 

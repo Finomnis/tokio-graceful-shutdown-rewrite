@@ -1,6 +1,7 @@
 Search for all TODOs in code
 
-
+- Error generic
+- Error handling
 
 - SubsystemBuilder (or PreparedSubsystem, or something similar)!
     - Allows creating subsystems:
@@ -10,6 +11,11 @@ Search for all TODOs in code
         - from `trait RestartableSubsystem`
     - maybe gets passed directly into `start`
 
+
+
+
+
+Done:
 - Solution to the entire "restartable subsystems" problem:
     - Make single subsystems awaitable! (Through the object returned from `start`)
     - Restart is then trivial to implement.

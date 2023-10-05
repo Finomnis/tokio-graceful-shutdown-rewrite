@@ -9,9 +9,9 @@
 
 use miette::Result;
 use tokio::time::{sleep, Duration};
-use tokio_graceful_shutdown_rewrite::{BoxedError, SubsystemHandle, Toplevel};
+use tokio_graceful_shutdown_rewrite::{SubsystemHandle, Toplevel};
 
-async fn subsys1(subsys: SubsystemHandle) -> Result<(), BoxedError> {
+async fn subsys1(subsys: SubsystemHandle) -> Result<()> {
     tracing::info!("Subsystem1 started.");
     subsys.on_shutdown_requested().await;
     tracing::info!("Shutting down Subsystem1 ...");
@@ -20,7 +20,7 @@ async fn subsys1(subsys: SubsystemHandle) -> Result<(), BoxedError> {
     Ok(())
 }
 
-async fn subsys2(subsys: SubsystemHandle) -> Result<(), BoxedError> {
+async fn subsys2(subsys: SubsystemHandle) -> Result<()> {
     tracing::info!("Subsystem2 started.");
     subsys.on_shutdown_requested().await;
     tracing::info!("Shutting down Subsystem2 ...");
@@ -30,7 +30,7 @@ async fn subsys2(subsys: SubsystemHandle) -> Result<(), BoxedError> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), BoxedError> {
+async fn main() -> Result<()> {
     // Init logging
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
@@ -40,10 +40,12 @@ async fn main() -> Result<(), BoxedError> {
     Toplevel::new(|s| async move {
         s.start("Subsys1", subsys1);
         s.start("Subsys2", subsys2);
-        Ok(())
     })
     .catch_signals()
     .handle_shutdown_requests(Duration::from_millis(1000))
     .await
-    .map_err(Into::into)
+    .unwrap();
+    //TODO: .map_err(Into::into)
+
+    Ok(())
 }

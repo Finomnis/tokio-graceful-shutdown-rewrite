@@ -8,7 +8,7 @@
 
 use std::{future::Future, sync::Arc};
 
-use crate::{BoxedError, StopReason, SubsystemHandle};
+use crate::{ErrTypeTraits, StopReason, SubsystemHandle};
 
 mod alive_guard;
 pub(crate) use self::alive_guard::AliveGuard;
@@ -18,14 +18,15 @@ pub(crate) struct SubsystemRunner {
 }
 
 impl SubsystemRunner {
-    pub(crate) fn new<Fut, Subsys>(
+    pub(crate) fn new<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
         subsystem: Subsys,
-        subsystem_handle: SubsystemHandle,
-        mut guard: AliveGuard,
+        subsystem_handle: SubsystemHandle<ErrType>,
+        mut guard: AliveGuard<ErrType>,
     ) -> Self
     where
-        Subsys: 'static + FnOnce(SubsystemHandle) -> Fut + Send,
-        Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
+        Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
+        Fut: 'static + Future<Output = Result<(), Err>> + Send,
+        Err: 'static + Into<ErrType>,
     {
         let aborthandle =
             tokio::spawn(run_subsystem(subsystem, subsystem_handle, guard)).abort_handle();
@@ -39,17 +40,19 @@ impl Drop for SubsystemRunner {
     }
 }
 
-async fn run_subsystem<Fut, Subsys>(
+async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
     subsystem: Subsys,
-    mut subsystem_handle: SubsystemHandle,
-    mut guard: AliveGuard,
+    mut subsystem_handle: SubsystemHandle<ErrType>,
+    mut guard: AliveGuard<ErrType>,
 ) where
-    Subsys: 'static + FnOnce(SubsystemHandle) -> Fut + Send,
-    Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
+    Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
+    Fut: 'static + Future<Output = Result<(), Err>> + Send,
+    Err: 'static + Into<ErrType>,
 {
     let mut redirected_subsystem_handle = subsystem_handle.delayed_clone();
 
-    let join_handle = tokio::spawn({ async move { subsystem(subsystem_handle).await } });
+    let join_handle =
+        tokio::spawn({ async move { subsystem(subsystem_handle).await.map_err(Into::into) } });
 
     // Abort on drop
     guard.on_cancel({
@@ -102,9 +105,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::subsystem::root_handle;
+    use crate::{subsystem::root_handle, BoxedError};
 
-    fn create_result_and_guard() -> (oneshot::Receiver<StopReason>, AliveGuard) {
+    fn create_result_and_guard() -> (oneshot::Receiver<StopReason>, AliveGuard<BoxedError>) {
         let (sender, receiver) = oneshot::channel();
 
         let guard = AliveGuard::new();
@@ -139,7 +142,7 @@ mod tests {
         async fn panic() {
             let (mut result, guard) = create_result_and_guard();
 
-            run_subsystem(
+            run_subsystem::<_, _, _, BoxedError>(
                 |_| async {
                     panic!();
                 },
@@ -155,7 +158,7 @@ mod tests {
         async fn error() {
             let (mut result, guard) = create_result_and_guard();
 
-            run_subsystem(
+            run_subsystem::<_, _, _, BoxedError>(
                 |_| async { Err(String::from("").into()) },
                 root_handle(),
                 guard,
@@ -173,7 +176,7 @@ mod tests {
 
             let timeout_result = timeout(
                 Duration::from_millis(100),
-                run_subsystem(
+                run_subsystem::<_, _, _, BoxedError>(
                     |_| async move {
                         drop_sender.send(()).await.unwrap();
                         std::future::pending().await
@@ -208,7 +211,7 @@ mod tests {
 
             let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
-            let _ = run_subsystem(
+            let _ = run_subsystem::<_, _, _, BoxedError>(
                 |_| async move {
                     drop_sender.send(()).await.unwrap();
                     std::future::pending().await
@@ -250,7 +253,7 @@ mod tests {
         async fn panic() {
             let (mut result, guard) = create_result_and_guard();
 
-            let runner = SubsystemRunner::new(
+            let runner = SubsystemRunner::new::<_, _, _, BoxedError>(
                 |_| async {
                     panic!();
                 },
@@ -266,7 +269,7 @@ mod tests {
         async fn error() {
             let (mut result, guard) = create_result_and_guard();
 
-            let runner = SubsystemRunner::new(
+            let runner = SubsystemRunner::new::<_, _, _, BoxedError>(
                 |_| async { Err(String::from("").into()) },
                 root_handle(),
                 guard,
@@ -282,7 +285,7 @@ mod tests {
 
             let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
-            let runner = SubsystemRunner::new(
+            let runner = SubsystemRunner::new::<_, _, _, BoxedError>(
                 |_| async move {
                     drop_sender.send(()).await.unwrap();
                     std::future::pending().await
@@ -315,7 +318,7 @@ mod tests {
 
             let (mut joiner_token, _) = JoinerToken::new(|_| None);
 
-            let _ = SubsystemRunner::new(
+            let _ = SubsystemRunner::new::<_, _, _, BoxedError>(
                 {
                     let (joiner_token, _) = joiner_token.child_token(|_| None);
                     |_| async move {

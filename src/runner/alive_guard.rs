@@ -1,19 +1,25 @@
 use std::sync::{Arc, Mutex};
 
-use crate::StopReason;
+use crate::{ErrTypeTraits, StopReason};
 
-struct Inner {
-    finished_callback: Option<Box<dyn FnOnce(StopReason) + Send>>,
+struct Inner<ErrType: ErrTypeTraits> {
+    finished_callback: Option<Box<dyn FnOnce(StopReason<ErrType>) + Send>>,
     cancelled_callback: Option<Box<dyn FnOnce() + Send>>,
-    stop_reason: Option<StopReason>,
+    stop_reason: Option<StopReason<ErrType>>,
 }
 
-#[derive(Clone)]
-pub(crate) struct AliveGuard {
-    inner: Arc<Mutex<Inner>>,
+pub(crate) struct AliveGuard<ErrType: ErrTypeTraits> {
+    inner: Arc<Mutex<Inner<ErrType>>>,
+}
+impl<ErrType: ErrTypeTraits> Clone for AliveGuard<ErrType> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
-impl AliveGuard {
+impl<ErrType: ErrTypeTraits> AliveGuard<ErrType> {
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
@@ -24,7 +30,7 @@ impl AliveGuard {
         }
     }
 
-    pub(crate) fn subsystem_ended(&self, reason: StopReason) {
+    pub(crate) fn subsystem_ended(&self, reason: StopReason<ErrType>) {
         let mut inner = self.inner.lock().unwrap();
         if let Some(previous_reason) = inner.stop_reason.replace(reason) {
             panic!("This should never happen. Please report this; it indicates a programming error. ({:?})", previous_reason);
@@ -37,14 +43,17 @@ impl AliveGuard {
         inner.cancelled_callback = Some(Box::new(cancelled_callback));
     }
 
-    pub(crate) fn on_finished(&self, finished_callback: impl FnOnce(StopReason) + 'static + Send) {
+    pub(crate) fn on_finished(
+        &self,
+        finished_callback: impl FnOnce(StopReason<ErrType>) + 'static + Send,
+    ) {
         let mut inner = self.inner.lock().unwrap();
         assert!(inner.finished_callback.is_none());
         inner.finished_callback = Some(Box::new(finished_callback));
     }
 }
 
-impl Drop for Inner {
+impl<ErrType: ErrTypeTraits> Drop for Inner<ErrType> {
     fn drop(&mut self) {
         let finished_callback = self
             .finished_callback
@@ -67,11 +76,11 @@ mod tests {
     use tokio::time::{timeout, Duration};
 
     use super::*;
-    use crate::utils::JoinerToken;
+    use crate::{utils::JoinerToken, BoxedError};
 
     #[test]
     fn fallback_is_cancelled() {
-        let alive_guard = AliveGuard::new();
+        let alive_guard = AliveGuard::<BoxedError>::new();
 
         let (set_result, mut result) = tokio::sync::oneshot::channel();
 
@@ -86,7 +95,7 @@ mod tests {
 
     #[test]
     fn normal_operation() {
-        let alive_guard = AliveGuard::new();
+        let alive_guard = AliveGuard::<BoxedError>::new();
 
         let (set_result, mut result) = tokio::sync::oneshot::channel();
 
@@ -103,7 +112,7 @@ mod tests {
 
     #[test]
     fn inverted_setup_order() {
-        let alive_guard = AliveGuard::new();
+        let alive_guard = AliveGuard::<BoxedError>::new();
 
         let (set_result, mut result) = tokio::sync::oneshot::channel();
 
@@ -120,7 +129,7 @@ mod tests {
 
     #[test]
     fn cancel_callback_with_finished() {
-        let alive_guard = AliveGuard::new();
+        let alive_guard = AliveGuard::<BoxedError>::new();
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter2 = Arc::clone(&counter);
@@ -139,7 +148,7 @@ mod tests {
 
     #[test]
     fn cancel_callback_with_finished_inverted_order() {
-        let alive_guard = AliveGuard::new();
+        let alive_guard = AliveGuard::<BoxedError>::new();
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter2 = Arc::clone(&counter);
@@ -158,7 +167,7 @@ mod tests {
 
     #[test]
     fn cancel_callback_without_finished() {
-        let alive_guard = AliveGuard::new();
+        let alive_guard = AliveGuard::<BoxedError>::new();
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter2 = Arc::clone(&counter);
@@ -176,7 +185,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "No `finished` callback was registered in AliveGuard!")]
     fn panic_if_no_finished_callback_set() {
-        let alive_guard = AliveGuard::new();
+        let alive_guard = AliveGuard::<BoxedError>::new();
         drop(alive_guard);
     }
 }

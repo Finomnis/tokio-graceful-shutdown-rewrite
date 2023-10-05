@@ -6,23 +6,31 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     runner::{AliveGuard, SubsystemRunner},
     signal_handling::wait_for_signal,
-    subsystem, BoxedError, NestedSubsystem, SubsystemHandle,
+    subsystem, BoxedError, ErrTypeTraits, NestedSubsystem, SubsystemHandle,
 };
 
-pub struct Toplevel {
-    root_handle: SubsystemHandle,
+#[must_use = "This toplevel must be consumed by calling `handle_shutdown_requests` on it."]
+pub struct Toplevel<ErrType: ErrTypeTraits = BoxedError> {
+    root_handle: SubsystemHandle<ErrType>,
     toplevel_subsys: NestedSubsystem,
 }
 
-impl Toplevel {
+impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
+    /// Creates a new Toplevel object.
+    ///
+    /// The Toplevel object is the base for everything else in this crate.
+    #[allow(clippy::new_without_default)]
     pub fn new<Fut, Subsys>(subsystem: Subsys) -> Self
     where
-        Subsys: 'static + FnOnce(SubsystemHandle) -> Fut + Send,
-        Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
+        Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
+        Fut: 'static + Future<Output = ()> + Send,
     {
         let root_handle = subsystem::root_handle();
 
-        let toplevel_subsys = root_handle.start("", subsystem);
+        let toplevel_subsys = root_handle.start("", move |s| async move {
+            subsystem(s).await;
+            Result::<(), ErrType>::Ok(())
+        });
 
         Self {
             root_handle,

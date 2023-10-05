@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     runner::{AliveGuard, SubsystemRunner},
     utils::{remote_drop_collection::RemotelyDroppableItems, JoinerToken},
-    BoxedError, NestedSubsystem,
+    BoxedError, ErrTypeTraits, NestedSubsystem,
 };
 
 struct Inner {
@@ -16,18 +16,19 @@ struct Inner {
 }
 
 // All the things needed to manage nested subsystems and wait for cancellation
-pub struct SubsystemHandle {
+pub struct SubsystemHandle<ErrType: ErrTypeTraits = BoxedError> {
     inner: ManuallyDrop<Inner>,
     // When dropped, redirect Self into this channel.
     // Required as a workaround for https://stackoverflow.com/questions/77172947/async-lifetime-issues-of-pass-by-reference-parameters.
-    drop_redirect: Option<oneshot::Sender<SubsystemHandle>>,
+    drop_redirect: Option<oneshot::Sender<SubsystemHandle<ErrType>>>,
 }
 
-impl SubsystemHandle {
-    pub fn start<Fut, Subsys>(&self, name: &str, subsystem: Subsys) -> NestedSubsystem
+impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
+    pub fn start<Err, Fut, Subsys>(&self, name: &str, subsystem: Subsys) -> NestedSubsystem
     where
-        Subsys: 'static + FnOnce(SubsystemHandle) -> Fut + Send,
-        Fut: 'static + Future<Output = Result<(), BoxedError>> + Send,
+        Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
+        Fut: 'static + Future<Output = Result<(), Err>> + Send,
+        Err: 'static + Into<ErrType>,
     {
         let alive_guard = AliveGuard::new();
 
@@ -66,7 +67,7 @@ impl SubsystemHandle {
 
     // For internal use only - should never be used by users.
     // Required as a short-lived second reference inside of `runner`.
-    pub(crate) fn delayed_clone(&mut self) -> oneshot::Receiver<SubsystemHandle> {
+    pub(crate) fn delayed_clone(&mut self) -> oneshot::Receiver<Self> {
         let (sender, receiver) = oneshot::channel();
 
         let previous = self.drop_redirect.replace(sender);
@@ -88,7 +89,7 @@ impl SubsystemHandle {
     }
 }
 
-impl Drop for SubsystemHandle {
+impl<ErrType: ErrTypeTraits> Drop for SubsystemHandle<ErrType> {
     fn drop(&mut self) {
         // SAFETY: This is how ManuallyDrop is meant to be used.
         // `self.inner` won't ever be used again because `self` will be gone after this
@@ -111,7 +112,7 @@ impl Drop for SubsystemHandle {
     }
 }
 
-pub(crate) fn root_handle() -> SubsystemHandle {
+pub(crate) fn root_handle<ErrType: ErrTypeTraits>() -> SubsystemHandle<ErrType> {
     SubsystemHandle {
         inner: ManuallyDrop::new(Inner {
             cancellation_token: CancellationToken::new(),
@@ -136,13 +137,13 @@ mod tests {
 
     #[tokio::test]
     async fn recursive_cancellation() {
-        let root_handle = root_handle();
+        let root_handle = root_handle::<BoxedError>();
 
         let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
         root_handle.start("", |x| async move {
             drop_sender.send(()).await.unwrap();
-            std::future::pending().await
+            std::future::pending::<Result<(), BoxedError>>().await
         });
 
         // Make sure we are executing the subsystem
@@ -168,12 +169,12 @@ mod tests {
 
         let subsys2 = |_| async move {
             drop_sender.send(()).await.unwrap();
-            std::future::pending().await
+            std::future::pending::<Result<(), BoxedError>>().await
         };
 
         let subsys = |x: SubsystemHandle| async move {
             x.start("", subsys2);
-            Ok(())
+            Result::<(), BoxedError>::Ok(())
         };
 
         root_handle.start("", subsys);
