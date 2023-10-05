@@ -54,7 +54,12 @@ async fn run_subsystem<Fut, Subsys>(
     // Abort on drop
     guard.on_cancel({
         let abort_handle = join_handle.abort_handle();
-        move || abort_handle.abort()
+        move || {
+            if !abort_handle.is_finished() {
+                tracing::warn!("Subsystem cancelled: '{}'.", "TODO: Name");
+            }
+            abort_handle.abort();
+        }
     });
 
     let result = match join_handle.await {

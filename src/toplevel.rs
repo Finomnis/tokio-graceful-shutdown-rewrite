@@ -49,7 +49,7 @@ impl Toplevel {
                 tracing::info!("Shutdown finished.");
             }
             Err(_) => {
-                panic!("Shutdown timed out!")
+                tracing::error!("Shutdown timed out!");
             }
         }
 

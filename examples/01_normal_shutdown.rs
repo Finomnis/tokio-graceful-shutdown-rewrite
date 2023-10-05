@@ -36,7 +36,7 @@ async fn main() -> Result<(), BoxedError> {
         .with_max_level(tracing::Level::TRACE)
         .init();
 
-    // Create toplevel
+    // Setup and execute subsystem tree
     Toplevel::new(|s| async move {
         s.start("Subsys1", subsys1);
         s.start("Subsys2", subsys2);
