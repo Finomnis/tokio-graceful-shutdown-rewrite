@@ -28,7 +28,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
-        Err: 'static + Into<ErrType>,
+        Err: Into<ErrType>,
     {
         let alive_guard = AliveGuard::new();
 

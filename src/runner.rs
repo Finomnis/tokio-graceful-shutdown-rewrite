@@ -26,10 +26,10 @@ impl SubsystemRunner {
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
-        Err: 'static + Into<ErrType>,
+        Err: Into<ErrType>,
     {
-        let aborthandle =
-            tokio::spawn(run_subsystem(subsystem, subsystem_handle, guard)).abort_handle();
+        let future = async { run_subsystem(subsystem, subsystem_handle, guard).await };
+        let aborthandle = tokio::spawn(future).abort_handle();
         SubsystemRunner { aborthandle }
     }
 }
@@ -47,12 +47,12 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
 ) where
     Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
     Fut: 'static + Future<Output = Result<(), Err>> + Send,
-    Err: 'static + Into<ErrType>,
+    Err: Into<ErrType>,
 {
     let mut redirected_subsystem_handle = subsystem_handle.delayed_clone();
 
-    let join_handle =
-        tokio::spawn({ async move { subsystem(subsystem_handle).await.map_err(Into::into) } });
+    let future = async { subsystem(subsystem_handle).await.map_err(|e| e.into()) };
+    let join_handle = tokio::spawn(future);
 
     // Abort on drop
     guard.on_cancel({

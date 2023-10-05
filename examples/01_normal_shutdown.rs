@@ -9,7 +9,7 @@
 
 use miette::Result;
 use tokio::time::{sleep, Duration};
-use tokio_graceful_shutdown_rewrite::{SubsystemHandle, Toplevel};
+use tokio_graceful_shutdown::{SubsystemHandle, Toplevel};
 
 async fn subsys1(subsys: SubsystemHandle) -> Result<()> {
     tracing::info!("Subsystem1 started.");

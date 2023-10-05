@@ -1,5 +1,5 @@
 [package]
-name = "tokio-graceful-shutdown-rewrite"
+name = "tokio-graceful-shutdown"
 version = "0.1.0"
 edition = "2021"
 

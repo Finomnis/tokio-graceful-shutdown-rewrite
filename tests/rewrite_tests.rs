@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::time::{sleep, Duration};
-use tokio_graceful_shutdown_rewrite::{SubsystemHandle, Toplevel};
+use tokio_graceful_shutdown::{SubsystemHandle, Toplevel};
 use tracing_test::traced_test;
 
 mod common;
