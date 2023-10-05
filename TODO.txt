@@ -1,6 +1,6 @@
 Search for all TODOs in code
 
-- Error generic
+- Name
 - Error handling
 
 - SubsystemBuilder (or PreparedSubsystem, or something similar)!
@@ -21,3 +21,5 @@ Done:
     - Restart is then trivial to implement.
         - Make subsystem "Shutdown on Error/Panic"
         - Start/await it in a loop in the parent subsystem
+
+- Error generic

@@ -1,4 +1,4 @@
-use std::{future::Future, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use tokio::time::error::Elapsed;
 use tokio_util::sync::CancellationToken;
@@ -27,7 +27,7 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
     {
         let root_handle = subsystem::root_handle();
 
-        let toplevel_subsys = root_handle.start("", move |s| async move {
+        let toplevel_subsys = root_handle.start_with_abs_name(Arc::from(""), move |s| async move {
             subsystem(s).await;
             Result::<(), ErrType>::Ok(())
         });

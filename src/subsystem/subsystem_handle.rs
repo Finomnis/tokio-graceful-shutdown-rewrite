@@ -10,6 +10,7 @@ use crate::{
 };
 
 struct Inner {
+    name: Arc<str>,
     cancellation_token: CancellationToken,
     joiner_token: JoinerToken,
     children: RemotelyDroppableItems<SubsystemRunner>,
@@ -24,7 +25,27 @@ pub struct SubsystemHandle<ErrType: ErrTypeTraits = BoxedError> {
 }
 
 impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
-    pub fn start<Err, Fut, Subsys>(&self, name: &str, subsystem: Subsys) -> NestedSubsystem
+    pub fn start<Err, Fut, Subsys>(
+        &self,
+        name: impl AsRef<str>,
+        subsystem: Subsys,
+    ) -> NestedSubsystem
+    where
+        Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
+        Fut: 'static + Future<Output = Result<(), Err>> + Send,
+        Err: Into<ErrType>,
+    {
+        self.start_with_abs_name(
+            Arc::from(format!("{}/{}", self.inner.name, name.as_ref())),
+            subsystem,
+        )
+    }
+
+    pub(crate) fn start_with_abs_name<Err, Fut, Subsys>(
+        &self,
+        name: Arc<str>,
+        subsystem: Subsys,
+    ) -> NestedSubsystem
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
@@ -38,6 +59,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
 
         let child_handle = SubsystemHandle {
             inner: ManuallyDrop::new(Inner {
+                name: Arc::clone(&name),
                 cancellation_token: self.inner.cancellation_token.child_token(),
                 joiner_token,
                 children: RemotelyDroppableItems::new(),
@@ -45,7 +67,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
             drop_redirect: None,
         };
 
-        let runner = SubsystemRunner::new(subsystem, child_handle, alive_guard.clone());
+        let runner = SubsystemRunner::new(name, subsystem, child_handle, alive_guard.clone());
 
         // Shenanigans to juggle child ownership
         //
@@ -115,6 +137,7 @@ impl<ErrType: ErrTypeTraits> Drop for SubsystemHandle<ErrType> {
 pub(crate) fn root_handle<ErrType: ErrTypeTraits>() -> SubsystemHandle<ErrType> {
     SubsystemHandle {
         inner: ManuallyDrop::new(Inner {
+            name: Arc::from(""),
             cancellation_token: CancellationToken::new(),
             joiner_token: JoinerToken::new(
                 |e| panic!("Uncaught error: {:?}", e), /* Panic. TODO: implement proper handling */

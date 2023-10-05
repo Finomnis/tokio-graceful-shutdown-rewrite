@@ -19,6 +19,7 @@ pub(crate) struct SubsystemRunner {
 
 impl SubsystemRunner {
     pub(crate) fn new<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
+        name: Arc<str>,
         subsystem: Subsys,
         subsystem_handle: SubsystemHandle<ErrType>,
         mut guard: AliveGuard<ErrType>,
@@ -28,7 +29,7 @@ impl SubsystemRunner {
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
         Err: Into<ErrType>,
     {
-        let future = async { run_subsystem(subsystem, subsystem_handle, guard).await };
+        let future = async { run_subsystem(name, subsystem, subsystem_handle, guard).await };
         let aborthandle = tokio::spawn(future).abort_handle();
         SubsystemRunner { aborthandle }
     }
@@ -41,6 +42,7 @@ impl Drop for SubsystemRunner {
 }
 
 async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
+    name: Arc<str>,
     subsystem: Subsys,
     mut subsystem_handle: SubsystemHandle<ErrType>,
     mut guard: AliveGuard<ErrType>,
@@ -57,9 +59,10 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
     // Abort on drop
     guard.on_cancel({
         let abort_handle = join_handle.abort_handle();
+        let name = Arc::clone(&name);
         move || {
             if !abort_handle.is_finished() {
-                tracing::warn!("Subsystem cancelled: '{}'.", "TODO: Name");
+                tracing::warn!("Subsystem cancelled: '{}'", name);
             }
             abort_handle.abort();
         }
@@ -69,7 +72,7 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
         Ok(Ok(())) => StopReason::Finish,
         Ok(Err(e)) => StopReason::Error(e),
         Err(e) => {
-            tracing::error!("Subsystem <TODO: name> panicked: {}", e);
+            tracing::error!("Subsystem panicked: '{}'", name);
             StopReason::Panic
         }
     };
@@ -129,6 +132,7 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             run_subsystem(
+                Arc::from(""),
                 |_| async { Result::<(), BoxedError>::Ok(()) },
                 root_handle(),
                 guard,
@@ -143,6 +147,7 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             run_subsystem::<_, _, _, BoxedError>(
+                Arc::from(""),
                 |_| async {
                     panic!();
                 },
@@ -159,6 +164,7 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             run_subsystem::<_, _, _, BoxedError>(
+                Arc::from(""),
                 |_| async { Err(String::from("").into()) },
                 root_handle(),
                 guard,
@@ -177,6 +183,7 @@ mod tests {
             let timeout_result = timeout(
                 Duration::from_millis(100),
                 run_subsystem::<_, _, _, BoxedError>(
+                    Arc::from(""),
                     |_| async move {
                         drop_sender.send(()).await.unwrap();
                         std::future::pending().await
@@ -212,6 +219,7 @@ mod tests {
             let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
             let _ = run_subsystem::<_, _, _, BoxedError>(
+                Arc::from(""),
                 |_| async move {
                     drop_sender.send(()).await.unwrap();
                     std::future::pending().await
@@ -240,6 +248,7 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             let runner = SubsystemRunner::new(
+                Arc::from(""),
                 |_| async { Result::<(), BoxedError>::Ok(()) },
                 root_handle(),
                 guard,
@@ -254,6 +263,7 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             let runner = SubsystemRunner::new::<_, _, _, BoxedError>(
+                Arc::from(""),
                 |_| async {
                     panic!();
                 },
@@ -270,6 +280,7 @@ mod tests {
             let (mut result, guard) = create_result_and_guard();
 
             let runner = SubsystemRunner::new::<_, _, _, BoxedError>(
+                Arc::from(""),
                 |_| async { Err(String::from("").into()) },
                 root_handle(),
                 guard,
@@ -286,6 +297,7 @@ mod tests {
             let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
             let runner = SubsystemRunner::new::<_, _, _, BoxedError>(
+                Arc::from(""),
                 |_| async move {
                     drop_sender.send(()).await.unwrap();
                     std::future::pending().await
@@ -319,6 +331,7 @@ mod tests {
             let (mut joiner_token, _) = JoinerToken::new(|_| None);
 
             let _ = SubsystemRunner::new::<_, _, _, BoxedError>(
+                Arc::from(""),
                 {
                     let (joiner_token, _) = joiner_token.child_token(|_| None);
                     |_| async move {
