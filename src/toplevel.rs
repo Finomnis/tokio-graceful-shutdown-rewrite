@@ -77,7 +77,7 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
     }
 
     #[doc(hidden)]
-    pub fn get_shutdown_token(&self) -> CancellationToken {
+    pub fn get_shutdown_token(&self) -> &CancellationToken {
         self.root_handle.get_cancellation_token()
     }
 }

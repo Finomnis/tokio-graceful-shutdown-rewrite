@@ -118,8 +118,8 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         self.inner.cancellation_token.is_cancelled()
     }
 
-    pub(crate) fn get_cancellation_token(&self) -> CancellationToken {
-        self.inner.cancellation_token.clone()
+    pub(crate) fn get_cancellation_token(&self) -> &CancellationToken {
+        &self.inner.cancellation_token
     }
 }
 
