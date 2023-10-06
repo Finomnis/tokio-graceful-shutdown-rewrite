@@ -12,6 +12,7 @@ use crate::{
 struct Inner {
     name: Arc<str>,
     cancellation_token: CancellationToken,
+    toplevel_cancellation_token: CancellationToken,
     joiner_token: JoinerToken,
     children: RemotelyDroppableItems<SubsystemRunner>,
 }
@@ -56,11 +57,13 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         let (joiner_token, joiner_token_ref) = self.inner.joiner_token.child_token(
             |e| Some(e), /* Forward error upwards. TODO: implement handling */
         );
+        let cancellation_token = self.inner.cancellation_token.child_token();
 
         let child_handle = SubsystemHandle {
             inner: ManuallyDrop::new(Inner {
                 name: Arc::clone(&name),
-                cancellation_token: self.inner.cancellation_token.child_token(),
+                cancellation_token: cancellation_token.clone(),
+                toplevel_cancellation_token: self.inner.toplevel_cancellation_token.clone(),
                 joiner_token,
                 children: RemotelyDroppableItems::new(),
             }),
@@ -80,6 +83,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
 
         NestedSubsystem {
             joiner: joiner_token_ref,
+            cancellation_token,
         }
     }
 
@@ -99,11 +103,19 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
     }
 
     pub fn initiate_shutdown(&self) {
+        self.inner.toplevel_cancellation_token.cancel();
+    }
+
+    pub fn initiate_local_shutdown(&self) {
         self.inner.cancellation_token.cancel();
     }
 
     pub async fn on_shutdown_requested(&self) {
         self.inner.cancellation_token.cancelled().await
+    }
+
+    pub fn is_shutdown_requested(&self) -> bool {
+        self.inner.cancellation_token.is_cancelled()
     }
 
     pub(crate) fn get_cancellation_token(&self) -> CancellationToken {
@@ -135,10 +147,13 @@ impl<ErrType: ErrTypeTraits> Drop for SubsystemHandle<ErrType> {
 }
 
 pub(crate) fn root_handle<ErrType: ErrTypeTraits>() -> SubsystemHandle<ErrType> {
+    let cancellation_token = CancellationToken::new();
+
     SubsystemHandle {
         inner: ManuallyDrop::new(Inner {
             name: Arc::from(""),
-            cancellation_token: CancellationToken::new(),
+            toplevel_cancellation_token: cancellation_token.clone(),
+            cancellation_token,
             joiner_token: JoinerToken::new(
                 |e| panic!("Uncaught error: {:?}", e), /* Panic. TODO: implement proper handling */
             )
