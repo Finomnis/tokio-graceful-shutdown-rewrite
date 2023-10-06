@@ -20,7 +20,7 @@ impl<T> ErrTypeTraits for T where
 {
 }
 
-mod errors;
+pub mod errors;
 mod future_ext;
 mod runner;
 mod signal_handling;
@@ -28,15 +28,15 @@ mod subsystem;
 mod toplevel;
 mod utils;
 
+use std::fmt::Display;
+
 pub use future_ext::FutureExt;
 pub use subsystem::NestedSubsystem;
 pub use subsystem::SubsystemHandle;
 pub use toplevel::Toplevel;
 
 #[derive(Debug)]
-pub enum StopReason<ErrType: ErrTypeTraits = BoxedError> {
-    Finish,
+pub enum SubsystemFailure<ErrType: ErrTypeTraits = BoxedError> {
     Panic,
     Error(ErrType),
-    Cancelled,
 }

@@ -4,7 +4,7 @@ mod subsystem_handle;
 pub(crate) use subsystem_handle::root_handle;
 pub use subsystem_handle::SubsystemHandle;
 
-use crate::utils::JoinerTokenRef;
+use crate::{utils::JoinerTokenRef, ErrTypeTraits};
 
 use tokio_util::sync::CancellationToken;
 

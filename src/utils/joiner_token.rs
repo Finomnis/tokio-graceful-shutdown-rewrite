@@ -5,23 +5,27 @@ use std::{
 
 use tokio::sync::watch;
 
-use crate::StopReason;
+use crate::{ErrTypeTraits, SubsystemFailure};
 
-struct Inner {
+struct Inner<ErrType: ErrTypeTraits> {
     counter: watch::Sender<(bool, u32)>,
-    parent: Option<Arc<Inner>>,
-    on_error: Box<dyn Fn(StopReason) -> Option<StopReason> + Sync + Send>,
+    parent: Option<Arc<Inner<ErrType>>>,
+    on_error:
+        Box<dyn Fn(SubsystemFailure<ErrType>) -> Option<SubsystemFailure<ErrType>> + Sync + Send>,
 }
 
-pub(crate) struct JoinerToken {
-    inner: Arc<Inner>,
+/// A token that keeps reference of its existance and its children.
+pub(crate) struct JoinerToken<ErrType: ErrTypeTraits> {
+    inner: Arc<Inner<ErrType>>,
 }
 
+/// A reference version that does not keep the content alive; purely for
+/// joining the subtree.
 pub(crate) struct JoinerTokenRef {
-    inner: Weak<Inner>,
+    counter: watch::Receiver<(bool, u32)>,
 }
 
-impl Debug for JoinerToken {
+impl<ErrType: ErrTypeTraits> Debug for JoinerToken<ErrType> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -33,28 +37,26 @@ impl Debug for JoinerToken {
 
 impl Debug for JoinerTokenRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(inner) = self.inner.upgrade() {
-            let counter = *inner.counter.borrow();
-            drop(inner);
-            write!(
-                f,
-                "JoinerTokenRef(alive = {}, children = {})",
-                counter.0, counter.1
-            )
-        } else {
-            write!(f, "JoinerTokenRef(dead)")
-        }
+        let counter = self.counter.borrow();
+        write!(
+            f,
+            "JoinerTokenRef(alive = {}, children = {})",
+            counter.0, counter.1
+        )
     }
 }
 
-impl JoinerToken {
+impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
     /// Creates a new joiner token.
     ///
     /// The `on_error` callback will receive errors/panics and has to decide
     /// how to handle them. It can also not handle them and instead pass them on.
     /// If it returns `Some`, the error will get passed on to its parent.
     pub(crate) fn new(
-        on_error: impl Fn(StopReason) -> Option<StopReason> + Sync + Send + 'static,
+        on_error: impl Fn(SubsystemFailure<ErrType>) -> Option<SubsystemFailure<ErrType>>
+            + Sync
+            + Send
+            + 'static,
     ) -> (Self, JoinerTokenRef) {
         let inner = Arc::new(Inner {
             counter: watch::channel((true, 0)).0,
@@ -63,7 +65,7 @@ impl JoinerToken {
         });
 
         let weak_ref = JoinerTokenRef {
-            inner: Arc::downgrade(&inner),
+            counter: inner.counter.subscribe(),
         };
 
         (Self { inner }, weak_ref)
@@ -83,7 +85,10 @@ impl JoinerToken {
 
     pub(crate) fn child_token(
         &self,
-        on_error: impl Fn(StopReason) -> Option<StopReason> + Sync + Send + 'static,
+        on_error: impl Fn(SubsystemFailure<ErrType>) -> Option<SubsystemFailure<ErrType>>
+            + Sync
+            + Send
+            + 'static,
     ) -> (Self, JoinerTokenRef) {
         let mut maybe_parent = Some(&self.inner);
         while let Some(parent) = maybe_parent {
@@ -100,7 +105,7 @@ impl JoinerToken {
         });
 
         let weak_ref = JoinerTokenRef {
-            inner: Arc::downgrade(&inner),
+            counter: inner.counter.subscribe(),
         };
 
         (Self { inner }, weak_ref)
@@ -113,7 +118,7 @@ impl JoinerToken {
         self.inner.counter.borrow().0
     }
 
-    pub(crate) fn raise_failure(&self, mut stop_reason: StopReason) {
+    pub(crate) fn raise_failure(&self, stop_reason: SubsystemFailure<ErrType>) {
         let mut maybe_stop_reason = Some(stop_reason);
 
         let mut maybe_parent = self.inner.parent.as_ref();
@@ -131,23 +136,27 @@ impl JoinerToken {
             tracing::warn!("Unhandled stop reason: {:?}", stop_reason);
         }
     }
-}
 
-impl JoinerTokenRef {
-    pub(crate) async fn join(&self) {
-        if let Some(inner) = self.inner.upgrade() {
-            let mut subscriber = inner.counter.subscribe();
-
-            // Ignore errors; if the channel got closed, that definitely means
-            // the token and all its children got dropped.
-            let _ = subscriber
-                .wait_for(|&(alive, children)| !alive && children == 0)
-                .await;
+    pub(crate) fn downgrade(self) -> JoinerTokenRef {
+        JoinerTokenRef {
+            counter: self.inner.counter.subscribe(),
         }
     }
 }
 
-impl Drop for JoinerToken {
+impl JoinerTokenRef {
+    pub(crate) async fn join(&self) {
+        // Ignore errors; if the channel got closed, that definitely means
+        // the token and all its children got dropped.
+        let _ = self
+            .counter
+            .clone()
+            .wait_for(|&(alive, children)| !alive && children == 0)
+            .await;
+    }
+}
+
+impl<ErrType: ErrTypeTraits> Drop for JoinerToken<ErrType> {
     fn drop(&mut self) {
         self.inner
             .counter
@@ -168,12 +177,14 @@ mod tests {
     use tokio::time::{sleep, timeout, Duration};
     use tracing_test::traced_test;
 
+    use crate::BoxedError;
+
     use super::*;
 
     #[test]
     #[traced_test]
     fn counters() {
-        let (root, _) = JoinerToken::new(|_| None);
+        let (root, _) = JoinerToken::<BoxedError>::new(|_| None);
         assert_eq!(0, root.count());
 
         let (child1, _) = root.child_token(|_| None);
@@ -207,7 +218,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn join() {
-        let (superroot, _) = JoinerToken::new(|_| None);
+        let (superroot, _) = JoinerToken::<BoxedError>::new(|_| None);
 
         let (mut root, _) = superroot.child_token(|_| None);
 
@@ -249,7 +260,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn join_through_ref() {
-        let (root, joiner) = JoinerToken::new(|_| None);
+        let (root, joiner) = JoinerToken::<BoxedError>::new(|_| None);
 
         let (child1, _) = root.child_token(|_| None);
         let (child2, _) = child1.child_token(|_| None);
@@ -286,7 +297,7 @@ mod tests {
 
     #[test]
     fn debug_print() {
-        let (root, _) = JoinerToken::new(|_| None);
+        let (root, _) = JoinerToken::<BoxedError>::new(|_| None);
         assert_eq!(format!("{:?}", root), "JoinerToken(children = 0)");
 
         let (child1, _) = root.child_token(|_| None);
@@ -298,7 +309,7 @@ mod tests {
 
     #[test]
     fn debug_print_ref() {
-        let (root, root_ref) = JoinerToken::new(|_| None);
+        let (root, root_ref) = JoinerToken::<BoxedError>::new(|_| None);
         assert_eq!(
             format!("{:?}", root_ref),
             "JoinerTokenRef(alive = true, children = 0)"
@@ -317,6 +328,9 @@ mod tests {
         );
 
         drop(child1);
-        assert_eq!(format!("{:?}", root_ref), "JoinerTokenRef(dead)");
+        assert_eq!(
+            format!("{:?}", root_ref),
+            "JoinerTokenRef(alive = false, children = 0)"
+        );
     }
 }

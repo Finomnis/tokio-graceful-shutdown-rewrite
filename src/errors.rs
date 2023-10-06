@@ -11,9 +11,11 @@ use crate::ErrTypeTraits;
 pub enum GracefulShutdownError<ErrType: ErrTypeTraits = crate::BoxedError> {
     /// At least one subsystem caused an error.
     #[error("at least one subsystem returned an error")]
+    #[diagnostic(code(graceful_shutdown::subsystems_failed))]
     SubsystemsFailed(#[related] Vec<SubsystemError<ErrType>>),
     /// The shutdown did not finish within the given timeout.
     #[error("shutdown timed out")]
+    #[diagnostic(code(graceful_shutdown::timeout))]
     ShutdownTimeout(#[related] Vec<SubsystemError<ErrType>>),
 }
 
@@ -37,7 +39,7 @@ impl<ErrType: ErrTypeTraits> GracefulShutdownError<ErrType> {
 /// This enum contains all the possible errors that a partial shutdown
 /// could cause.
 #[derive(Debug, Error, Diagnostic)]
-pub enum PartialShutdownError<ErrType: ErrTypeTraits = crate::BoxedError> {
+enum PartialShutdownError<ErrType: ErrTypeTraits = crate::BoxedError> {
     /// At least one subsystem caused an error.
     #[error("at least one subsystem returned an error")]
     SubsystemsFailed(#[related] Vec<SubsystemError<ErrType>>),
@@ -102,9 +104,6 @@ pub enum SubsystemError<ErrType: ErrTypeTraits = crate::BoxedError> {
     /// The subsystem returned an error value. Carries the actual error as the second argument.
     #[error("Error in subsystem '{0}'")]
     Failed(String, #[source] SubsystemFailure<ErrType>),
-    /// The subsystem was cancelled. Should only happen if the shutdown timeout is exceeded.
-    #[error("Subsystem '{0}' was aborted")]
-    Cancelled(String),
     /// The subsystem panicked.
     #[error("Subsystem '{0}' panicked")]
     Panicked(String),
@@ -119,7 +118,6 @@ impl<ErrType: ErrTypeTraits> SubsystemError<ErrType> {
     pub fn name(&self) -> &str {
         match self {
             SubsystemError::Failed(name, _) => name,
-            SubsystemError::Cancelled(name) => name,
             SubsystemError::Panicked(name) => name,
         }
     }
@@ -153,7 +151,6 @@ mod tests {
         examine_report(PartialShutdownError::AlreadyShuttingDown::<BoxedError>.into());
         examine_report(PartialShutdownError::SubsystemNotFound::<BoxedError>.into());
         examine_report(PartialShutdownError::SubsystemsFailed::<BoxedError>(vec![]).into());
-        examine_report(SubsystemError::Cancelled::<BoxedError>("".into()).into());
         examine_report(SubsystemError::Panicked::<BoxedError>("".into()).into());
         examine_report(
             SubsystemError::Failed::<BoxedError>("".into(), SubsystemFailure("".into())).into(),
@@ -165,7 +162,7 @@ mod tests {
     fn extract_related_from_graceful_shutdown_error() {
         let related = || {
             vec![
-                SubsystemError::Cancelled("a".into()),
+                SubsystemError::Failed("a".into(), SubsystemFailure(String::from("A").into())),
                 SubsystemError::Panicked("b".into()),
             ]
         };
@@ -175,7 +172,7 @@ mod tests {
 
             let elem = iter.next().unwrap();
             assert_eq!(elem.name(), "a");
-            assert!(matches!(elem, SubsystemError::Cancelled(_)));
+            assert!(matches!(elem, SubsystemError::Failed(_, _)));
 
             let elem = iter.next().unwrap();
             assert_eq!(elem.name(), "b");

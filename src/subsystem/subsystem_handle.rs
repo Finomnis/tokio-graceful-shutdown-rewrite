@@ -6,23 +6,28 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     runner::{AliveGuard, SubsystemRunner},
     utils::{remote_drop_collection::RemotelyDroppableItems, JoinerToken},
-    BoxedError, ErrTypeTraits, NestedSubsystem,
+    BoxedError, ErrTypeTraits, NestedSubsystem, SubsystemFailure,
 };
 
-struct Inner {
+struct Inner<ErrType: ErrTypeTraits> {
     name: Arc<str>,
     cancellation_token: CancellationToken,
     toplevel_cancellation_token: CancellationToken,
-    joiner_token: JoinerToken,
+    joiner_token: JoinerToken<ErrType>,
     children: RemotelyDroppableItems<SubsystemRunner>,
 }
 
 // All the things needed to manage nested subsystems and wait for cancellation
 pub struct SubsystemHandle<ErrType: ErrTypeTraits = BoxedError> {
-    inner: ManuallyDrop<Inner>,
+    inner: ManuallyDrop<Inner<ErrType>>,
     // When dropped, redirect Self into this channel.
     // Required as a workaround for https://stackoverflow.com/questions/77172947/async-lifetime-issues-of-pass-by-reference-parameters.
-    drop_redirect: Option<oneshot::Sender<SubsystemHandle<ErrType>>>,
+    drop_redirect: Option<oneshot::Sender<WeakSubsystemHandle<ErrType>>>,
+}
+
+pub(crate) struct WeakSubsystemHandle<ErrType: ErrTypeTraits> {
+    pub(crate) joiner_token: JoinerToken<ErrType>,
+    children: RemotelyDroppableItems<SubsystemRunner>,
 }
 
 impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
@@ -79,7 +84,9 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         // alive_guard will keep the guard alive and the callback will only be called inside of
         // the guard's drop() implementation.
         let child_dropper = self.inner.children.insert(runner);
-        alive_guard.on_finished(|d| drop(child_dropper));
+        alive_guard.on_finished(|| {
+            drop(child_dropper);
+        });
 
         NestedSubsystem {
             joiner: joiner_token_ref,
@@ -93,7 +100,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
 
     // For internal use only - should never be used by users.
     // Required as a short-lived second reference inside of `runner`.
-    pub(crate) fn delayed_clone(&mut self) -> oneshot::Receiver<Self> {
+    pub(crate) fn delayed_clone(&mut self) -> oneshot::Receiver<WeakSubsystemHandle<ErrType>> {
         let (sender, receiver) = oneshot::channel();
 
         let previous = self.drop_redirect.replace(sender);
@@ -134,9 +141,9 @@ impl<ErrType: ErrTypeTraits> Drop for SubsystemHandle<ErrType> {
         let inner = unsafe { ManuallyDrop::take(&mut self.inner) };
 
         if let Some(redirect) = self.drop_redirect.take() {
-            let redirected_self = Self {
-                inner: ManuallyDrop::new(inner),
-                drop_redirect: None,
+            let redirected_self = WeakSubsystemHandle {
+                joiner_token: inner.joiner_token,
+                children: inner.children,
             };
 
             // ignore error; an error would indicate that there is no receiver.
@@ -152,11 +159,16 @@ pub(crate) fn root_handle<ErrType: ErrTypeTraits>() -> SubsystemHandle<ErrType> 
     SubsystemHandle {
         inner: ManuallyDrop::new(Inner {
             name: Arc::from(""),
+            cancellation_token: cancellation_token.clone(),
             toplevel_cancellation_token: cancellation_token.clone(),
-            cancellation_token,
-            joiner_token: JoinerToken::new(
-                |e| panic!("Uncaught error: {:?}", e), /* Panic. TODO: implement proper handling */
-            )
+            joiner_token: JoinerToken::new(move |e| {
+                match e {
+                    SubsystemFailure::Panic => tracing::error!("Uncaught panic."),
+                    SubsystemFailure::Error(e) => tracing::error!("Uncaught error: {e}"),
+                };
+                cancellation_token.cancel();
+                None
+            })
             .0,
             children: RemotelyDroppableItems::new(),
         }),

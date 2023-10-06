@@ -1,17 +1,19 @@
 use std::sync::{Arc, Mutex};
 
-use crate::{ErrTypeTraits, StopReason};
-
-struct Inner<ErrType: ErrTypeTraits> {
-    finished_callback: Option<Box<dyn FnOnce(StopReason<ErrType>) + Send>>,
+struct Inner {
+    finished_callback: Option<Box<dyn FnOnce() + Send>>,
     cancelled_callback: Option<Box<dyn FnOnce() + Send>>,
-    stop_reason: Option<StopReason<ErrType>>,
 }
 
-pub(crate) struct AliveGuard<ErrType: ErrTypeTraits> {
-    inner: Arc<Mutex<Inner<ErrType>>>,
+/// Allows registering callback functions that will get called on destruction.
+///
+/// This struct is the mechanism that manages lifetime of parents and children
+/// in the subsystem tree. It allows for cancellation of the subsytem on drop,
+/// and for automatic deregistering in the parent when the child is finished.
+pub(crate) struct AliveGuard {
+    inner: Arc<Mutex<Inner>>,
 }
-impl<ErrType: ErrTypeTraits> Clone for AliveGuard<ErrType> {
+impl Clone for AliveGuard {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -19,22 +21,14 @@ impl<ErrType: ErrTypeTraits> Clone for AliveGuard<ErrType> {
     }
 }
 
-impl<ErrType: ErrTypeTraits> AliveGuard<ErrType> {
+impl AliveGuard {
     pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
                 finished_callback: None,
                 cancelled_callback: None,
-                stop_reason: None,
             })),
         }
-    }
-
-    pub(crate) fn subsystem_ended(&self, reason: StopReason<ErrType>) {
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(previous_reason) = inner.stop_reason.replace(reason) {
-            panic!("This should never happen. Please report this; it indicates a programming error. ({:?})", previous_reason);
-        };
     }
 
     pub(crate) fn on_cancel(&self, cancelled_callback: impl FnOnce() + 'static + Send) {
@@ -43,24 +37,21 @@ impl<ErrType: ErrTypeTraits> AliveGuard<ErrType> {
         inner.cancelled_callback = Some(Box::new(cancelled_callback));
     }
 
-    pub(crate) fn on_finished(
-        &self,
-        finished_callback: impl FnOnce(StopReason<ErrType>) + 'static + Send,
-    ) {
+    pub(crate) fn on_finished(&self, finished_callback: impl FnOnce() + 'static + Send) {
         let mut inner = self.inner.lock().unwrap();
         assert!(inner.finished_callback.is_none());
         inner.finished_callback = Some(Box::new(finished_callback));
     }
 }
 
-impl<ErrType: ErrTypeTraits> Drop for Inner<ErrType> {
+impl Drop for Inner {
     fn drop(&mut self) {
         let finished_callback = self
             .finished_callback
             .take()
             .expect("No `finished` callback was registered in AliveGuard!");
 
-        finished_callback(self.stop_reason.take().unwrap_or(StopReason::Cancelled));
+        finished_callback();
 
         if let Some(cancelled_callback) = self.cancelled_callback.take() {
             cancelled_callback()
@@ -79,67 +70,15 @@ mod tests {
     use crate::{utils::JoinerToken, BoxedError};
 
     #[test]
-    fn fallback_is_cancelled() {
-        let alive_guard = AliveGuard::<BoxedError>::new();
-
-        let (set_result, mut result) = tokio::sync::oneshot::channel();
-
-        alive_guard.on_finished(move |stopreason| {
-            set_result.send(stopreason).unwrap();
-        });
-
-        drop(alive_guard);
-
-        assert!(matches!(result.try_recv().unwrap(), StopReason::Cancelled));
-    }
-
-    #[test]
-    fn normal_operation() {
-        let alive_guard = AliveGuard::<BoxedError>::new();
-
-        let (set_result, mut result) = tokio::sync::oneshot::channel();
-
-        alive_guard.on_finished(move |stopreason| {
-            set_result.send(stopreason).unwrap();
-        });
-
-        alive_guard.subsystem_ended(StopReason::Panic);
-
-        drop(alive_guard);
-
-        assert!(matches!(result.try_recv().unwrap(), StopReason::Panic));
-    }
-
-    #[test]
-    fn inverted_setup_order() {
-        let alive_guard = AliveGuard::<BoxedError>::new();
-
-        let (set_result, mut result) = tokio::sync::oneshot::channel();
-
-        alive_guard.subsystem_ended(StopReason::Panic);
-
-        alive_guard.on_finished(move |stopreason| {
-            set_result.send(stopreason).unwrap();
-        });
-
-        drop(alive_guard);
-
-        assert!(matches!(result.try_recv().unwrap(), StopReason::Panic));
-    }
-
-    #[test]
-    fn cancel_callback_with_finished() {
-        let alive_guard = AliveGuard::<BoxedError>::new();
+    fn finished_callback() {
+        let alive_guard = AliveGuard::new();
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter2 = Arc::clone(&counter);
 
-        alive_guard.on_finished(|_| {});
-        alive_guard.on_cancel(move || {
+        alive_guard.on_finished(move || {
             counter2.fetch_add(1, Ordering::Relaxed);
         });
-
-        alive_guard.subsystem_ended(StopReason::Panic);
 
         drop(alive_guard);
 
@@ -147,15 +86,13 @@ mod tests {
     }
 
     #[test]
-    fn cancel_callback_with_finished_inverted_order() {
-        let alive_guard = AliveGuard::<BoxedError>::new();
+    fn cancel_callback() {
+        let alive_guard = AliveGuard::new();
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter2 = Arc::clone(&counter);
 
-        alive_guard.subsystem_ended(StopReason::Panic);
-
-        alive_guard.on_finished(|_| {});
+        alive_guard.on_finished(|| {});
         alive_guard.on_cancel(move || {
             counter2.fetch_add(1, Ordering::Relaxed);
         });
@@ -166,26 +103,29 @@ mod tests {
     }
 
     #[test]
-    fn cancel_callback_without_finished() {
-        let alive_guard = AliveGuard::<BoxedError>::new();
+    fn both_callbacks() {
+        let alive_guard = AliveGuard::new();
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter2 = Arc::clone(&counter);
+        let counter3 = Arc::clone(&counter);
 
-        alive_guard.on_finished(|_| {});
-        alive_guard.on_cancel(move || {
+        alive_guard.on_finished(move || {
             counter2.fetch_add(1, Ordering::Relaxed);
+        });
+        alive_guard.on_cancel(move || {
+            counter3.fetch_add(1, Ordering::Relaxed);
         });
 
         drop(alive_guard);
 
-        assert_eq!(counter.load(Ordering::Relaxed), 1);
+        assert_eq!(counter.load(Ordering::Relaxed), 2);
     }
 
     #[test]
     #[should_panic(expected = "No `finished` callback was registered in AliveGuard!")]
     fn panic_if_no_finished_callback_set() {
-        let alive_guard = AliveGuard::<BoxedError>::new();
+        let alive_guard = AliveGuard::new();
         drop(alive_guard);
     }
 }

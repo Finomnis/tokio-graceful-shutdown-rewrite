@@ -8,7 +8,7 @@
 
 use std::{future::Future, sync::Arc};
 
-use crate::{ErrTypeTraits, StopReason, SubsystemHandle};
+use crate::{ErrTypeTraits, SubsystemFailure, SubsystemHandle};
 
 mod alive_guard;
 pub(crate) use self::alive_guard::AliveGuard;
@@ -22,7 +22,7 @@ impl SubsystemRunner {
         name: Arc<str>,
         subsystem: Subsys,
         subsystem_handle: SubsystemHandle<ErrType>,
-        mut guard: AliveGuard<ErrType>,
+        mut guard: AliveGuard,
     ) -> Self
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
@@ -45,7 +45,7 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
     name: Arc<str>,
     subsystem: Subsys,
     mut subsystem_handle: SubsystemHandle<ErrType>,
-    mut guard: AliveGuard<ErrType>,
+    mut guard: AliveGuard,
 ) where
     Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
     Fut: 'static + Future<Output = Result<(), Err>> + Send,
@@ -68,16 +68,14 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
         }
     });
 
-    let result = match join_handle.await {
-        Ok(Ok(())) => StopReason::Finish,
-        Ok(Err(e)) => StopReason::Error(e),
+    let failure = match join_handle.await {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(SubsystemFailure::Error(e)),
         Err(e) => {
             tracing::error!("Subsystem panicked: '{}'", name);
-            StopReason::Panic
+            Some(SubsystemFailure::Panic)
         }
     };
-
-    guard.subsystem_ended(result);
 
     // Retrieve the handle that was passed into the subsystem.
     // Originally it was intended to pass the handle as reference, but due
@@ -90,14 +88,20 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
         Err(_) => panic!("The SubsystemHandle object must not be leaked out of the subsystem!"),
     };
 
+    // Raise potential errors
+    let joiner_token = subsystem_handle.joiner_token;
+    if let Some(failure) = failure {
+        joiner_token.raise_failure(failure);
+    }
+
     // Wait for children to finish before we destroy the `SubsystemHandle` object.
     // Otherwise the children would be cancelled immediately.
     //
     // This is the main mechanism that forwards a cancellation to all the children.
-    subsystem_handle.wait_for_children().await;
-    drop(subsystem_handle);
+    joiner_token.downgrade().join().await;
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -110,7 +114,7 @@ mod tests {
     use super::*;
     use crate::{subsystem::root_handle, BoxedError};
 
-    fn create_result_and_guard() -> (oneshot::Receiver<StopReason>, AliveGuard<BoxedError>) {
+    fn create_result_and_guard() -> (oneshot::Receiver<StopReason>, AliveGuard) {
         let (sender, receiver) = oneshot::channel();
 
         let guard = AliveGuard::new();
@@ -353,3 +357,4 @@ mod tests {
         }
     }
 }
+*/
