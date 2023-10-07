@@ -34,9 +34,3 @@ pub use future_ext::FutureExt;
 pub use subsystem::NestedSubsystem;
 pub use subsystem::SubsystemHandle;
 pub use toplevel::Toplevel;
-
-#[derive(Debug)]
-pub enum SubsystemFailure<ErrType: ErrTypeTraits = BoxedError> {
-    Panic,
-    Error(ErrType),
-}

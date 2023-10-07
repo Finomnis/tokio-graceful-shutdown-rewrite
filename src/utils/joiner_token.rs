@@ -5,13 +5,12 @@ use std::{
 
 use tokio::sync::watch;
 
-use crate::{ErrTypeTraits, SubsystemFailure};
+use crate::{errors::SubsystemError, ErrTypeTraits};
 
 struct Inner<ErrType: ErrTypeTraits> {
     counter: watch::Sender<(bool, u32)>,
     parent: Option<Arc<Inner<ErrType>>>,
-    on_error:
-        Box<dyn Fn(SubsystemFailure<ErrType>) -> Option<SubsystemFailure<ErrType>> + Sync + Send>,
+    on_error: Box<dyn Fn(SubsystemError<ErrType>) -> Option<SubsystemError<ErrType>> + Sync + Send>,
 }
 
 /// A token that keeps reference of its existance and its children.
@@ -53,7 +52,7 @@ impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
     /// how to handle them. It can also not handle them and instead pass them on.
     /// If it returns `Some`, the error will get passed on to its parent.
     pub(crate) fn new(
-        on_error: impl Fn(SubsystemFailure<ErrType>) -> Option<SubsystemFailure<ErrType>>
+        on_error: impl Fn(SubsystemError<ErrType>) -> Option<SubsystemError<ErrType>>
             + Sync
             + Send
             + 'static,
@@ -85,7 +84,7 @@ impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
 
     pub(crate) fn child_token(
         &self,
-        on_error: impl Fn(SubsystemFailure<ErrType>) -> Option<SubsystemFailure<ErrType>>
+        on_error: impl Fn(SubsystemError<ErrType>) -> Option<SubsystemError<ErrType>>
             + Sync
             + Send
             + 'static,
@@ -118,7 +117,7 @@ impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
         self.inner.counter.borrow().0
     }
 
-    pub(crate) fn raise_failure(&self, stop_reason: SubsystemFailure<ErrType>) {
+    pub(crate) fn raise_failure(&self, stop_reason: SubsystemError<ErrType>) {
         let mut maybe_stop_reason = Some(stop_reason);
 
         let mut maybe_parent = self.inner.parent.as_ref();

@@ -4,9 +4,10 @@ use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    errors::SubsystemError,
     runner::{AliveGuard, SubsystemRunner},
     utils::{remote_drop_collection::RemotelyDroppableItems, JoinerToken},
-    BoxedError, ErrTypeTraits, NestedSubsystem, SubsystemFailure,
+    BoxedError, ErrTypeTraits, NestedSubsystem,
 };
 
 struct Inner<ErrType: ErrTypeTraits> {
@@ -163,8 +164,12 @@ pub(crate) fn root_handle<ErrType: ErrTypeTraits>() -> SubsystemHandle<ErrType> 
             toplevel_cancellation_token: cancellation_token.clone(),
             joiner_token: JoinerToken::new(move |e| {
                 match e {
-                    SubsystemFailure::Panic => tracing::error!("Uncaught panic."),
-                    SubsystemFailure::Error(e) => tracing::error!("Uncaught error: {e}"),
+                    SubsystemError::Panicked(name) => {
+                        tracing::error!("Uncaught panic from subsytem '{name}'.")
+                    }
+                    SubsystemError::Failed(name, e) => {
+                        tracing::error!("Uncaught error from subsystem '{name}': {e}",)
+                    }
                 };
                 cancellation_token.cancel();
                 None

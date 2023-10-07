@@ -8,7 +8,10 @@
 
 use std::{future::Future, sync::Arc};
 
-use crate::{ErrTypeTraits, SubsystemFailure, SubsystemHandle};
+use crate::{
+    errors::{SubsystemError, SubsystemFailure},
+    ErrTypeTraits, SubsystemHandle,
+};
 
 mod alive_guard;
 pub(crate) use self::alive_guard::AliveGuard;
@@ -70,11 +73,8 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
 
     let failure = match join_handle.await {
         Ok(Ok(())) => None,
-        Ok(Err(e)) => Some(SubsystemFailure::Error(e)),
-        Err(e) => {
-            tracing::error!("Subsystem panicked: '{}'", name);
-            Some(SubsystemFailure::Panic)
-        }
+        Ok(Err(e)) => Some(SubsystemError::Failed(name, SubsystemFailure(e))),
+        Err(e) => Some(SubsystemError::Panicked(name)),
     };
 
     // Retrieve the handle that was passed into the subsystem.

@@ -1,5 +1,7 @@
 //! All the errors that can be caused by this crate.
 
+use std::sync::Arc;
+
 use miette::Diagnostic;
 use thiserror::Error;
 
@@ -102,11 +104,13 @@ impl<ErrType> std::error::Error for SubsystemFailure<ErrType> where
 #[derive(Debug, Error, Diagnostic)]
 pub enum SubsystemError<ErrType: ErrTypeTraits = crate::BoxedError> {
     /// The subsystem returned an error value. Carries the actual error as the second argument.
+    #[diagnostic(code(graceful_shutdown::subsystem::failed))]
     #[error("Error in subsystem '{0}'")]
-    Failed(String, #[source] SubsystemFailure<ErrType>),
+    Failed(Arc<str>, #[source] SubsystemFailure<ErrType>),
     /// The subsystem panicked.
+    #[diagnostic(code(graceful_shutdown::subsystem::panicked))]
     #[error("Subsystem '{0}' panicked")]
-    Panicked(String),
+    Panicked(Arc<str>),
 }
 
 impl<ErrType: ErrTypeTraits> SubsystemError<ErrType> {
