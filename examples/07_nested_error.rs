@@ -37,8 +37,5 @@ async fn main() -> Result<()> {
     .catch_signals()
     .handle_shutdown_requests(Duration::from_millis(1000))
     .await
-    .unwrap();
-    //TODO: .map_err(Into::into)
-
-    Ok(())
+    .map_err(Into::into)
 }

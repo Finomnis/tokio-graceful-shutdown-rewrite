@@ -154,7 +154,9 @@ impl<ErrType: ErrTypeTraits> Drop for SubsystemHandle<ErrType> {
     }
 }
 
-pub(crate) fn root_handle<ErrType: ErrTypeTraits>() -> SubsystemHandle<ErrType> {
+pub(crate) fn root_handle<ErrType: ErrTypeTraits>(
+    on_error: impl Fn(SubsystemError<ErrType>) + Sync + Send + 'static,
+) -> SubsystemHandle<ErrType> {
     let cancellation_token = CancellationToken::new();
 
     SubsystemHandle {
@@ -163,14 +165,7 @@ pub(crate) fn root_handle<ErrType: ErrTypeTraits>() -> SubsystemHandle<ErrType> 
             cancellation_token: cancellation_token.clone(),
             toplevel_cancellation_token: cancellation_token.clone(),
             joiner_token: JoinerToken::new(move |e| {
-                match e {
-                    SubsystemError::Panicked(name) => {
-                        tracing::error!("Uncaught panic from subsytem '{name}'.")
-                    }
-                    SubsystemError::Failed(name, e) => {
-                        tracing::error!("Uncaught error from subsystem '{name}': {e}",)
-                    }
-                };
+                on_error(e);
                 cancellation_token.cancel();
                 None
             })
@@ -192,7 +187,7 @@ mod tests {
 
     #[tokio::test]
     async fn recursive_cancellation() {
-        let root_handle = root_handle::<BoxedError>();
+        let root_handle = root_handle::<BoxedError>(|_| {});
 
         let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
@@ -218,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn recursive_cancellation_2() {
-        let root_handle = root_handle();
+        let root_handle = root_handle(|_| {});
 
         let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 

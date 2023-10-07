@@ -14,23 +14,23 @@ pub enum GracefulShutdownError<ErrType: ErrTypeTraits = crate::BoxedError> {
     /// At least one subsystem caused an error.
     #[error("at least one subsystem returned an error")]
     #[diagnostic(code(graceful_shutdown::subsystems_failed))]
-    SubsystemsFailed(#[related] Vec<SubsystemError<ErrType>>),
+    SubsystemsFailed(#[related] Box<[SubsystemError<ErrType>]>),
     /// The shutdown did not finish within the given timeout.
     #[error("shutdown timed out")]
     #[diagnostic(code(graceful_shutdown::timeout))]
-    ShutdownTimeout(#[related] Vec<SubsystemError<ErrType>>),
+    ShutdownTimeout(#[related] Box<[SubsystemError<ErrType>]>),
 }
 
 impl<ErrType: ErrTypeTraits> GracefulShutdownError<ErrType> {
     /// Converts the error into a list of subsystem errors that occurred.
-    pub fn into_subsystem_errors(self) -> Vec<SubsystemError<ErrType>> {
+    pub fn into_subsystem_errors(self) -> Box<[SubsystemError<ErrType>]> {
         match self {
             GracefulShutdownError::SubsystemsFailed(rel) => rel,
             GracefulShutdownError::ShutdownTimeout(rel) => rel,
         }
     }
     /// Queries the list of subsystem errors that occurred.
-    pub fn get_subsystem_errors(&self) -> &Vec<SubsystemError<ErrType>> {
+    pub fn get_subsystem_errors(&self) -> &[SubsystemError<ErrType>] {
         match self {
             GracefulShutdownError::SubsystemsFailed(rel) => rel,
             GracefulShutdownError::ShutdownTimeout(rel) => rel,
@@ -150,8 +150,8 @@ mod tests {
 
     #[test]
     fn errors_can_be_converted_to_diagnostic() {
-        examine_report(GracefulShutdownError::ShutdownTimeout::<BoxedError>(vec![]).into());
-        examine_report(GracefulShutdownError::SubsystemsFailed::<BoxedError>(vec![]).into());
+        examine_report(GracefulShutdownError::ShutdownTimeout::<BoxedError>(Box::new([])).into());
+        examine_report(GracefulShutdownError::SubsystemsFailed::<BoxedError>(Box::new([])).into());
         examine_report(PartialShutdownError::AlreadyShuttingDown::<BoxedError>.into());
         examine_report(PartialShutdownError::SubsystemNotFound::<BoxedError>.into());
         examine_report(PartialShutdownError::SubsystemsFailed::<BoxedError>(vec![]).into());
@@ -165,13 +165,13 @@ mod tests {
     #[test]
     fn extract_related_from_graceful_shutdown_error() {
         let related = || {
-            vec![
+            Box::new([
                 SubsystemError::Failed("a".into(), SubsystemFailure(String::from("A").into())),
                 SubsystemError::Panicked("b".into()),
-            ]
+            ])
         };
 
-        let matches_related = |data: &Vec<SubsystemError<BoxedError>>| {
+        let matches_related = |data: &[SubsystemError<BoxedError>]| {
             let mut iter = data.iter();
 
             let elem = iter.next().unwrap();
