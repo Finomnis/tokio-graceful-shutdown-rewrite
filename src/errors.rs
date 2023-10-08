@@ -13,7 +13,7 @@ use crate::ErrTypeTraits;
 pub enum GracefulShutdownError<ErrType: ErrTypeTraits = crate::BoxedError> {
     /// At least one subsystem caused an error.
     #[error("at least one subsystem returned an error")]
-    #[diagnostic(code(graceful_shutdown::subsystems_failed))]
+    #[diagnostic(code(graceful_shutdown::failed))]
     SubsystemsFailed(#[related] Box<[SubsystemError<ErrType>]>),
     /// The shutdown did not finish within the given timeout.
     #[error("shutdown timed out")]
