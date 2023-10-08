@@ -92,11 +92,12 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
 
         match tokio::time::timeout(shutdown_timeout, self.toplevel_subsys.join()).await {
             Ok(()) => {
-                tracing::info!("Shutdown finished.");
                 let errors = collect_errors();
                 if errors.is_empty() {
+                    tracing::info!("Shutdown finished.");
                     Ok(())
                 } else {
+                    tracing::warn!("Shutdown finished with errors.");
                     Err(GracefulShutdownError::SubsystemsFailed(errors))
                 }
             }
