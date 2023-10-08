@@ -86,6 +86,7 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
                 return result;
             },
             _ = self.root_handle.on_shutdown_requested() => {
+                tracing::info!("Initiating shutdown ...");
             }
         );
 
