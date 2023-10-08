@@ -22,9 +22,28 @@ miette = "5.10.0"
 async-trait = "0.1.73"
 
 [dev-dependencies]
+# Error propagation
 anyhow = "1.0.75"
 eyre = "0.6.8"
 miette = { version = "5.10.0", features = ["fancy"] }
-tokio = { version = "1.32.0", features = ["full"] }
+
+# Logging
 tracing-subscriber = "0.3.17"
 tracing-test = "0.2.4"
+
+# Tokio
+tokio = { version = "1.32.0", features = ["full"] }
+
+# Hyper example
+hyper = { version = "0.14.20", features = ["full"] }
+
+# Warp example
+warp = "0.3.1"
+
+# For testing unix signals
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.27.1", default-features = false, features = ["signal"] }
+
+# Make leak sanitizer more reliable
+[profile.dev]
+opt-level = 1
