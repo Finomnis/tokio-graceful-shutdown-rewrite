@@ -32,5 +32,6 @@ use std::fmt::Display;
 
 pub use future_ext::FutureExt;
 pub use subsystem::NestedSubsystem;
+pub use subsystem::SubsystemBuilder;
 pub use subsystem::SubsystemHandle;
 pub use toplevel::Toplevel;

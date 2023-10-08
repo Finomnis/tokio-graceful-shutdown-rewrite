@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use tokio::time::{sleep, Duration};
-use tokio_graceful_shutdown::{SubsystemHandle, Toplevel};
+use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 use tracing_test::traced_test;
 
 mod common;
@@ -20,7 +20,7 @@ async fn normal_shutdown() {
     };
 
     let toplevel = Toplevel::new(move |s: SubsystemHandle| async move {
-        s.start("subsys", subsystem);
+        s.start(SubsystemBuilder::new("subsys", subsystem));
     });
     let shutdown_token = toplevel.get_shutdown_token().clone();
 

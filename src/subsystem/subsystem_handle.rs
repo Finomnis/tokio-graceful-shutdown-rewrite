@@ -7,7 +7,7 @@ use crate::{
     errors::SubsystemError,
     runner::{AliveGuard, SubsystemRunner},
     utils::{remote_drop_collection::RemotelyDroppableItems, JoinerToken},
-    BoxedError, ErrTypeTraits, NestedSubsystem,
+    BoxedError, ErrTypeTraits, NestedSubsystem, SubsystemBuilder,
 };
 
 struct Inner<ErrType: ErrTypeTraits> {
@@ -34,8 +34,7 @@ pub(crate) struct WeakSubsystemHandle<ErrType: ErrTypeTraits> {
 impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
     pub fn start<Err, Fut, Subsys>(
         &self,
-        name: impl AsRef<str>,
-        subsystem: Subsys,
+        builder: SubsystemBuilder<ErrType, Err, Fut, Subsys>,
     ) -> NestedSubsystem
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
@@ -43,8 +42,8 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         Err: Into<ErrType>,
     {
         self.start_with_abs_name(
-            Arc::from(format!("{}/{}", self.inner.name, name.as_ref())),
-            subsystem,
+            Arc::from(format!("{}/{}", self.inner.name, builder.name)),
+            builder.subsystem,
         )
     }
 
@@ -183,7 +182,7 @@ mod tests {
     use tracing_test::traced_test;
 
     use super::*;
-    use crate::utils::JoinerToken;
+    use crate::{subsystem::SubsystemBuilder, utils::JoinerToken};
 
     #[tokio::test]
     async fn recursive_cancellation() {
@@ -191,10 +190,10 @@ mod tests {
 
         let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
-        root_handle.start("", |x| async move {
+        root_handle.start(SubsystemBuilder::new("", |x| async move {
             drop_sender.send(()).await.unwrap();
             std::future::pending::<Result<(), BoxedError>>().await
-        });
+        }));
 
         // Make sure we are executing the subsystem
         let recv_result = timeout(Duration::from_millis(100), drop_receiver.recv())
@@ -223,11 +222,12 @@ mod tests {
         };
 
         let subsys = |x: SubsystemHandle| async move {
-            x.start("", subsys2);
+            x.start(SubsystemBuilder::new("", subsys2));
+
             Result::<(), BoxedError>::Ok(())
         };
 
-        root_handle.start("", subsys);
+        root_handle.start(SubsystemBuilder::new("", subsys));
 
         // Make sure we are executing the subsystem
         let recv_result = timeout(Duration::from_millis(100), drop_receiver.recv())

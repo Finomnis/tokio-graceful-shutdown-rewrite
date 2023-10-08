@@ -6,10 +6,10 @@
 
 use miette::Result;
 use tokio::time::{sleep, Duration};
-use tokio_graceful_shutdown::{SubsystemHandle, Toplevel};
+use tokio_graceful_shutdown::{SubsystemBuilder, SubsystemHandle, Toplevel};
 
 async fn subsys1(subsys: SubsystemHandle) -> Result<()> {
-    subsys.start("Subsys2", subsys2);
+    subsys.start(SubsystemBuilder::new("Subsys2", subsys2));
     tracing::info!("Subsystem1 started.");
     subsys.on_shutdown_requested().await;
     tracing::info!("Shutting down Subsystem1 ...");
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
 
     // Setup and execute subsystem tree
     Toplevel::new(|s| async move {
-        s.start("Subsys1", subsys1);
+        s.start(SubsystemBuilder::new("Subsys1", subsys1));
     })
     .catch_signals()
     .handle_shutdown_requests(Duration::from_millis(1000))
