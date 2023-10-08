@@ -75,10 +75,13 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
 
         tokio::select!(
             _ = self.toplevel_subsys.join() => {
+                tracing::info!("All subsystems finished.");
+
+                // Not really necessary, but for good measure.
                 self.root_handle.initiate_shutdown();
 
                 let errors = collect_errors();
-                let result = if errors.is_empty(){
+                let result = if errors.is_empty() {
                     Ok(())
                 } else {
                     Err(GracefulShutdownError::SubsystemsFailed(errors))
