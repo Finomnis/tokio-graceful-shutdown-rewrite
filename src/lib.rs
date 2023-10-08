@@ -21,7 +21,9 @@ impl<T> ErrTypeTraits for T where
 }
 
 pub mod errors;
+
 mod future_ext;
+mod into_subsystem;
 mod runner;
 mod signal_handling;
 mod subsystem;
@@ -31,6 +33,7 @@ mod utils;
 use std::fmt::Display;
 
 pub use future_ext::FutureExt;
+pub use into_subsystem::IntoSubsystem;
 pub use subsystem::NestedSubsystem;
 pub use subsystem::SubsystemBuilder;
 pub use subsystem::SubsystemHandle;
