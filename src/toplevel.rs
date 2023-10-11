@@ -11,7 +11,7 @@ use crate::{
     errors::{GracefulShutdownError, SubsystemError},
     runner::{AliveGuard, SubsystemRunner},
     signal_handling::wait_for_signal,
-    subsystem, BoxedError, ErrTypeTraits, NestedSubsystem, SubsystemHandle,
+    subsystem, BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemHandle,
 };
 
 #[must_use = "This toplevel must be consumed by calling `handle_shutdown_requests` on it."]
@@ -44,14 +44,19 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
             };
 
             if let Err(mpsc::SendError(e)) = error_sender.send(e) {
-                tracing::warn!("An error got dropped: {e}");
+                tracing::warn!("An error got dropped: {e:?}");
             };
         });
 
-        let toplevel_subsys = root_handle.start_with_abs_name(Arc::from(""), move |s| async move {
-            subsystem(s).await;
-            Result::<(), ErrType>::Ok(())
-        });
+        let toplevel_subsys = root_handle.start_with_abs_name(
+            Arc::from(""),
+            move |s| async move {
+                subsystem(s).await;
+                Result::<(), ErrType>::Ok(())
+            },
+            ErrorAction::Forward,
+            ErrorAction::Forward,
+        );
 
         Self {
             root_handle,

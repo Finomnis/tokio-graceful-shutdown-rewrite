@@ -38,8 +38,8 @@ async fn subsys1_keepalive(subsys: SubsystemHandle) -> Result<()> {
         //     .on_panic(ErrorAction::CatchAndLocalShutdown)
         //     .spawn_on(subsys);
 
-        if let Err(err) = nested_subsys.join() {
-            tracing::error!("Subsystem1 failed: {}", err);
+        if let Err(err) = nested_subsys.join().await {
+            tracing::error!("Subsystem1 failed: {:?}", miette::Report::from(err));
         } else {
             break;
         }
