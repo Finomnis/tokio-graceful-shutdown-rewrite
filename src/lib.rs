@@ -1,4 +1,4 @@
-//#![deny(unreachable_pub)]
+#![deny(unreachable_pub)]
 //#![deny(missing_docs)]
 #![doc(
     issue_tracker_base_url = "https://github.com/Finomnis/tokio-graceful-shutdown/issues",
@@ -22,6 +22,7 @@ impl<T> ErrTypeTraits for T where
 
 pub mod errors;
 
+mod error_action;
 mod future_ext;
 mod into_subsystem;
 mod runner;
@@ -32,6 +33,7 @@ mod utils;
 
 use std::fmt::Display;
 
+pub use error_action::ErrorAction;
 pub use future_ext::FutureExt;
 pub use into_subsystem::IntoSubsystem;
 pub use subsystem::NestedSubsystem;

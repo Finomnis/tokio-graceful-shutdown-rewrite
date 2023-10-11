@@ -7,7 +7,7 @@ use crate::{
     errors::SubsystemError,
     runner::{AliveGuard, SubsystemRunner},
     utils::{remote_drop_collection::RemotelyDroppableItems, JoinerToken},
-    BoxedError, ErrTypeTraits, NestedSubsystem, SubsystemBuilder,
+    BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemBuilder,
 };
 
 struct Inner<ErrType: ErrTypeTraits> {
@@ -35,7 +35,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
     pub fn start<Err, Fut, Subsys>(
         &self,
         builder: SubsystemBuilder<ErrType, Err, Fut, Subsys>,
-    ) -> NestedSubsystem
+    ) -> NestedSubsystem<ErrType>
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
@@ -51,7 +51,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         &self,
         name: Arc<str>,
         subsystem: Subsys,
-    ) -> NestedSubsystem
+    ) -> NestedSubsystem<ErrType>
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
@@ -91,6 +91,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         NestedSubsystem {
             joiner: joiner_token_ref,
             cancellation_token,
+            _phantom: Default::default(),
         }
     }
 
@@ -123,6 +124,14 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
 
     pub fn is_shutdown_requested(&self) -> bool {
         self.inner.cancellation_token.is_cancelled()
+    }
+
+    pub fn change_failure_action(&self, action: ErrorAction) {
+        todo!()
+    }
+
+    pub fn change_panic_action(&self, action: ErrorAction) {
+        todo!()
     }
 
     pub(crate) fn get_cancellation_token(&self) -> &CancellationToken {

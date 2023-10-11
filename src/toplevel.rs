@@ -17,7 +17,7 @@ use crate::{
 #[must_use = "This toplevel must be consumed by calling `handle_shutdown_requests` on it."]
 pub struct Toplevel<ErrType: ErrTypeTraits = BoxedError> {
     root_handle: SubsystemHandle<ErrType>,
-    toplevel_subsys: NestedSubsystem,
+    toplevel_subsys: NestedSubsystem<ErrType>,
     errors: mpsc::Receiver<SubsystemError<ErrType>>,
 }
 
@@ -94,7 +94,7 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
         );
 
         match tokio::time::timeout(shutdown_timeout, self.toplevel_subsys.join()).await {
-            Ok(()) => {
+            Ok(Ok(())) => {
                 let errors = collect_errors();
                 if errors.is_empty() {
                     tracing::info!("Shutdown finished.");
@@ -103,6 +103,10 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
                     tracing::warn!("Shutdown finished with errors.");
                     Err(GracefulShutdownError::SubsystemsFailed(errors))
                 }
+            }
+            Ok(Err(_)) => {
+                // This can't happen because the toplevel subsys doesn't catch any errors; it only forwards them.
+                unreachable!();
             }
             Err(_) => {
                 tracing::error!("Shutdown timed out!");

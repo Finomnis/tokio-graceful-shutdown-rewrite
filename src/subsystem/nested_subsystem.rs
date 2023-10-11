@@ -1,7 +1,11 @@
+use crate::{errors::SubsystemJoinError, ErrTypeTraits};
+
 use super::NestedSubsystem;
 
-impl NestedSubsystem {
-    pub async fn join(&self) {
+impl<ErrType: ErrTypeTraits> NestedSubsystem<ErrType> {
+    pub async fn join(&self) -> Result<(), SubsystemJoinError<ErrType>> {
+        // TODO: implement error handling
+        // Do it like in the Toplevel, where we have an mpsc that collects the errors
         self.joiner.join().await
     }
 
