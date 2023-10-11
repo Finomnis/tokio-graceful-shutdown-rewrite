@@ -1,4 +1,8 @@
-use std::{future::Future, mem::ManuallyDrop, sync::Arc};
+use std::{
+    future::Future,
+    mem::ManuallyDrop,
+    sync::{mpsc, Arc, Mutex},
+};
 
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -7,8 +11,10 @@ use crate::{
     errors::SubsystemError,
     runner::{AliveGuard, SubsystemRunner},
     utils::{remote_drop_collection::RemotelyDroppableItems, JoinerToken},
-    BoxedError, ErrTypeTraits, NestedSubsystem, SubsystemBuilder,
+    BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemBuilder,
 };
+
+use super::error_collector::ErrorCollector;
 
 struct Inner<ErrType: ErrTypeTraits> {
     name: Arc<str>,
@@ -35,7 +41,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
     pub fn start<Err, Fut, Subsys>(
         &self,
         builder: SubsystemBuilder<ErrType, Err, Fut, Subsys>,
-    ) -> NestedSubsystem
+    ) -> NestedSubsystem<ErrType>
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
@@ -44,6 +50,8 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         self.start_with_abs_name(
             Arc::from(format!("{}/{}", self.inner.name, builder.name)),
             builder.subsystem,
+            builder.failure_action,
+            builder.panic_action,
         )
     }
 
@@ -51,7 +59,9 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         &self,
         name: Arc<str>,
         subsystem: Subsys,
-    ) -> NestedSubsystem
+        failure_action: ErrorAction,
+        panic_action: ErrorAction,
+    ) -> NestedSubsystem<ErrType>
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
         Fut: 'static + Future<Output = Result<(), Err>> + Send,
@@ -59,10 +69,30 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
     {
         let alive_guard = AliveGuard::new();
 
-        let (joiner_token, joiner_token_ref) = self.inner.joiner_token.child_token(
-            |e| Some(e), /* Forward error upwards. TODO: implement handling */
-        );
+        let (error_sender, errors) = mpsc::channel();
+
         let cancellation_token = self.inner.cancellation_token.child_token();
+
+        let (joiner_token, joiner_token_ref) = self.inner.joiner_token.child_token({
+            let cancellation_token = cancellation_token.clone();
+            move |e| {
+                let error_action = match &e {
+                    SubsystemError::Failed(_, _) => failure_action,
+                    SubsystemError::Panicked(_) => panic_action,
+                };
+
+                match error_action {
+                    ErrorAction::Forward => Some(e),
+                    ErrorAction::CatchAndLocalShutdown => {
+                        if let Err(mpsc::SendError(e)) = error_sender.send(e) {
+                            tracing::warn!("An error got dropped: {e:?}");
+                        };
+                        cancellation_token.cancel();
+                        None
+                    }
+                }
+            }
+        });
 
         let child_handle = SubsystemHandle {
             inner: ManuallyDrop::new(Inner {
@@ -91,6 +121,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         NestedSubsystem {
             joiner: joiner_token_ref,
             cancellation_token,
+            errors: Mutex::new(ErrorCollector::new(errors)),
         }
     }
 
@@ -123,6 +154,14 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
 
     pub fn is_shutdown_requested(&self) -> bool {
         self.inner.cancellation_token.is_cancelled()
+    }
+
+    pub fn change_failure_action(&self, action: ErrorAction) {
+        todo!()
+    }
+
+    pub fn change_panic_action(&self, action: ErrorAction) {
+        todo!()
     }
 
     pub(crate) fn get_cancellation_token(&self) -> &CancellationToken {

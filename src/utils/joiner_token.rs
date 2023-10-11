@@ -120,7 +120,7 @@ impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
     pub(crate) fn raise_failure(&self, stop_reason: SubsystemError<ErrType>) {
         let mut maybe_stop_reason = Some(stop_reason);
 
-        let mut maybe_parent = self.inner.parent.as_ref();
+        let mut maybe_parent = Some(&self.inner);
         while let Some(parent) = maybe_parent {
             if let Some(stop_reason) = maybe_stop_reason {
                 maybe_stop_reason = (parent.on_error)(stop_reason);

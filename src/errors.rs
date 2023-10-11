@@ -38,21 +38,14 @@ impl<ErrType: ErrTypeTraits> GracefulShutdownError<ErrType> {
     }
 }
 
-/// This enum contains all the possible errors that a partial shutdown
+/// This enum contains all the possible errors that joining a subsystem
 /// could cause.
 #[derive(Debug, Error, Diagnostic)]
-enum PartialShutdownError<ErrType: ErrTypeTraits = crate::BoxedError> {
+pub enum SubsystemJoinError<ErrType: ErrTypeTraits = crate::BoxedError> {
     /// At least one subsystem caused an error.
+    #[diagnostic(code(graceful_shutdown::subsystem_join::failed))]
     #[error("at least one subsystem returned an error")]
-    SubsystemsFailed(#[related] Vec<SubsystemError<ErrType>>),
-    /// The given nested subsystem does not seem to be a child of
-    /// the parent subsystem.
-    #[error("unable to find nested subsystem in given subsystem")]
-    SubsystemNotFound,
-    /// A partial shutdown can not be performed because the entire program
-    /// is already shutting down.
-    #[error("unable to perform partial shutdown, the program is already shutting down")]
-    AlreadyShuttingDown,
+    SubsystemsFailed(#[related] Arc<[SubsystemError<ErrType>]>),
 }
 
 /// A wrapper type that carries the errors returned by subsystems.
@@ -152,9 +145,7 @@ mod tests {
     fn errors_can_be_converted_to_diagnostic() {
         examine_report(GracefulShutdownError::ShutdownTimeout::<BoxedError>(Box::new([])).into());
         examine_report(GracefulShutdownError::SubsystemsFailed::<BoxedError>(Box::new([])).into());
-        examine_report(PartialShutdownError::AlreadyShuttingDown::<BoxedError>.into());
-        examine_report(PartialShutdownError::SubsystemNotFound::<BoxedError>.into());
-        examine_report(PartialShutdownError::SubsystemsFailed::<BoxedError>(vec![]).into());
+        examine_report(SubsystemJoinError::SubsystemsFailed::<BoxedError>(Arc::new([])).into());
         examine_report(SubsystemError::Panicked::<BoxedError>("".into()).into());
         examine_report(
             SubsystemError::Failed::<BoxedError>("".into(), SubsystemFailure("".into())).into(),
