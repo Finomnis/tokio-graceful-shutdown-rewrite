@@ -1,9 +1,10 @@
 use std::{
     future::Future,
     mem::ManuallyDrop,
-    sync::{mpsc, Arc, Mutex},
+    sync::{atomic::Ordering, mpsc, Arc, Mutex},
 };
 
+use atomic::Atomic;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -14,7 +15,7 @@ use crate::{
     BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemBuilder,
 };
 
-use super::error_collector::ErrorCollector;
+use super::{error_collector::ErrorCollector, ErrorActions};
 
 struct Inner<ErrType: ErrTypeTraits> {
     name: Arc<str>,
@@ -50,8 +51,10 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         self.start_with_abs_name(
             Arc::from(format!("{}/{}", self.inner.name, builder.name)),
             builder.subsystem,
-            builder.failure_action,
-            builder.panic_action,
+            ErrorActions {
+                on_failure: Atomic::new(builder.failure_action),
+                on_panic: Atomic::new(builder.panic_action),
+            },
         )
     }
 
@@ -59,8 +62,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
         &self,
         name: Arc<str>,
         subsystem: Subsys,
-        failure_action: ErrorAction,
-        panic_action: ErrorAction,
+        error_actions: ErrorActions,
     ) -> NestedSubsystem<ErrType>
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
@@ -73,12 +75,17 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
 
         let cancellation_token = self.inner.cancellation_token.child_token();
 
+        let error_actions = Arc::new(error_actions);
+
         let (joiner_token, joiner_token_ref) = self.inner.joiner_token.child_token({
             let cancellation_token = cancellation_token.clone();
+            let error_actions = Arc::clone(&error_actions);
             move |e| {
                 let error_action = match &e {
-                    SubsystemError::Failed(_, _) => failure_action,
-                    SubsystemError::Panicked(_) => panic_action,
+                    SubsystemError::Failed(_, _) => {
+                        error_actions.on_failure.load(Ordering::Relaxed)
+                    }
+                    SubsystemError::Panicked(_) => error_actions.on_panic.load(Ordering::Relaxed),
                 };
 
                 match error_action {
@@ -122,6 +129,7 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
             joiner: joiner_token_ref,
             cancellation_token,
             errors: Mutex::new(ErrorCollector::new(errors)),
+            error_actions,
         }
     }
 
@@ -154,14 +162,6 @@ impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
 
     pub fn is_shutdown_requested(&self) -> bool {
         self.inner.cancellation_token.is_cancelled()
-    }
-
-    pub fn change_failure_action(&self, action: ErrorAction) {
-        todo!()
-    }
-
-    pub fn change_panic_action(&self, action: ErrorAction) {
-        todo!()
     }
 
     pub(crate) fn get_cancellation_token(&self) -> &CancellationToken {

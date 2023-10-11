@@ -4,6 +4,7 @@ use std::{
     time::Duration,
 };
 
+use atomic::Atomic;
 use tokio::time::error::Elapsed;
 use tokio_util::sync::CancellationToken;
 
@@ -11,7 +12,8 @@ use crate::{
     errors::{GracefulShutdownError, SubsystemError},
     runner::{AliveGuard, SubsystemRunner},
     signal_handling::wait_for_signal,
-    subsystem, BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemHandle,
+    subsystem::{self, ErrorActions},
+    BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemHandle,
 };
 
 #[must_use = "This toplevel must be consumed by calling `handle_shutdown_requests` on it."]
@@ -54,8 +56,10 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
                 subsystem(s).await;
                 Result::<(), ErrType>::Ok(())
             },
-            ErrorAction::Forward,
-            ErrorAction::Forward,
+            ErrorActions {
+                on_failure: Atomic::new(ErrorAction::Forward),
+                on_panic: Atomic::new(ErrorAction::Forward),
+            },
         );
 
         Self {

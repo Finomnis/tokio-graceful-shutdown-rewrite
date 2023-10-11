@@ -1,4 +1,6 @@
-use crate::{errors::SubsystemJoinError, ErrTypeTraits};
+use std::sync::atomic::Ordering;
+
+use crate::{errors::SubsystemJoinError, ErrTypeTraits, ErrorAction};
 
 use super::NestedSubsystem;
 
@@ -16,5 +18,15 @@ impl<ErrType: ErrTypeTraits> NestedSubsystem<ErrType> {
 
     pub fn initiate_shutdown(&self) {
         self.cancellation_token.cancel()
+    }
+
+    pub fn change_failure_action(&self, action: ErrorAction) {
+        self.error_actions
+            .on_failure
+            .store(action, Ordering::Relaxed);
+    }
+
+    pub fn change_panic_action(&self, action: ErrorAction) {
+        self.error_actions.on_panic.store(action, Ordering::Relaxed);
     }
 }
