@@ -1,4 +1,13 @@
-Search for all TODOs in code
+- Search for all TODOs in code
+- Port over documentation
+- Port over tests
+
+
+
+
+
+
+Done:
 
 - Name
 - Error handling
@@ -11,11 +20,6 @@ Search for all TODOs in code
         - from `trait RestartableSubsystem`
     - maybe gets passed directly into `start`
 
-
-
-
-
-Done:
 - Solution to the entire "restartable subsystems" problem:
     - Make single subsystems awaitable! (Through the object returned from `start`)
     - Restart is then trivial to implement.

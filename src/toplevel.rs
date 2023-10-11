@@ -5,12 +5,10 @@ use std::{
 };
 
 use atomic::Atomic;
-use tokio::time::error::Elapsed;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     errors::{GracefulShutdownError, SubsystemError},
-    runner::{AliveGuard, SubsystemRunner},
     signal_handling::wait_for_signal,
     subsystem::{self, ErrorActions},
     BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemHandle,
@@ -70,7 +68,7 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
     }
 
     pub async fn handle_shutdown_requests(
-        mut self,
+        self,
         shutdown_timeout: Duration,
     ) -> Result<(), GracefulShutdownError<ErrType>> {
         let collect_errors = move || {

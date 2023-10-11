@@ -3,10 +3,7 @@ mod nested_subsystem;
 mod subsystem_builder;
 mod subsystem_handle;
 
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 pub use subsystem_builder::SubsystemBuilder;
 pub use subsystem_handle::SubsystemHandle;

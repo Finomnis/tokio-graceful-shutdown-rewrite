@@ -5,7 +5,6 @@
     test(no_crate_inject, attr(deny(warnings))),
     test(attr(allow(dead_code)))
 )]
-#![allow(unused)] // TODO: remove this.
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -30,8 +29,6 @@ mod signal_handling;
 mod subsystem;
 mod toplevel;
 mod utils;
-
-use std::fmt::Display;
 
 pub use error_action::ErrorAction;
 pub use future_ext::FutureExt;

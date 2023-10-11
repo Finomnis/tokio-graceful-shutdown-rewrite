@@ -35,7 +35,8 @@ pub struct SubsystemHandle<ErrType: ErrTypeTraits = BoxedError> {
 
 pub(crate) struct WeakSubsystemHandle<ErrType: ErrTypeTraits> {
     pub(crate) joiner_token: JoinerToken<ErrType>,
-    children: RemotelyDroppableItems<SubsystemRunner>,
+    // Children are stored here to keep them alive
+    _children: RemotelyDroppableItems<SubsystemRunner>,
 }
 
 impl<ErrType: ErrTypeTraits> SubsystemHandle<ErrType> {
@@ -182,7 +183,7 @@ impl<ErrType: ErrTypeTraits> Drop for SubsystemHandle<ErrType> {
         if let Some(redirect) = self.drop_redirect.take() {
             let redirected_self = WeakSubsystemHandle {
                 joiner_token: inner.joiner_token,
-                children: inner.children,
+                _children: inner.children,
             };
 
             // ignore error; an error would indicate that there is no receiver.
@@ -218,10 +219,9 @@ pub(crate) fn root_handle<ErrType: ErrTypeTraits>(
 mod tests {
 
     use tokio::time::{sleep, timeout, Duration};
-    use tracing_test::traced_test;
 
     use super::*;
-    use crate::{subsystem::SubsystemBuilder, utils::JoinerToken};
+    use crate::subsystem::SubsystemBuilder;
 
     #[tokio::test]
     async fn recursive_cancellation() {
@@ -229,7 +229,7 @@ mod tests {
 
         let (drop_sender, mut drop_receiver) = tokio::sync::mpsc::channel::<()>(1);
 
-        root_handle.start(SubsystemBuilder::new("", |x| async move {
+        root_handle.start(SubsystemBuilder::new("", |_| async move {
             drop_sender.send(()).await.unwrap();
             std::future::pending::<Result<(), BoxedError>>().await
         }));

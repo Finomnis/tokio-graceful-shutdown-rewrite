@@ -1,6 +1,6 @@
-use std::{borrow::Cow, future::Future, marker::PhantomData, sync::Arc};
+use std::{borrow::Cow, future::Future, marker::PhantomData};
 
-use crate::{ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemHandle};
+use crate::{ErrTypeTraits, ErrorAction, SubsystemHandle};
 
 pub struct SubsystemBuilder<'a, ErrType, Err, Fut, Subsys>
 where
@@ -13,7 +13,7 @@ where
     pub(crate) subsystem: Subsys,
     pub(crate) failure_action: ErrorAction,
     pub(crate) panic_action: ErrorAction,
-    _phantom: PhantomData<(fn() -> (Fut, ErrType, Err))>,
+    _phantom: PhantomData<fn() -> (Fut, ErrType, Err)>,
 }
 
 impl<'a, ErrType, Err, Fut, Subsys> SubsystemBuilder<'a, ErrType, Err, Fut, Subsys>

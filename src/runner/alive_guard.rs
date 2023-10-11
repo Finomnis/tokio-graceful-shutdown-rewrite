@@ -64,10 +64,7 @@ mod tests {
 
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    use tokio::time::{timeout, Duration};
-
     use super::*;
-    use crate::{utils::JoinerToken, BoxedError};
 
     #[test]
     fn finished_callback() {

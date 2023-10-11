@@ -25,7 +25,7 @@ impl SubsystemRunner {
         name: Arc<str>,
         subsystem: Subsys,
         subsystem_handle: SubsystemHandle<ErrType>,
-        mut guard: AliveGuard,
+        guard: AliveGuard,
     ) -> Self
     where
         Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
@@ -48,7 +48,7 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
     name: Arc<str>,
     subsystem: Subsys,
     mut subsystem_handle: SubsystemHandle<ErrType>,
-    mut guard: AliveGuard,
+    guard: AliveGuard,
 ) where
     Subsys: 'static + FnOnce(SubsystemHandle<ErrType>) -> Fut + Send,
     Fut: 'static + Future<Output = Result<(), Err>> + Send,
@@ -74,7 +74,17 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
     let failure = match join_handle.await {
         Ok(Ok(())) => None,
         Ok(Err(e)) => Some(SubsystemError::Failed(name, SubsystemFailure(e))),
-        Err(e) => Some(SubsystemError::Panicked(name)),
+        Err(e) => {
+            if e.is_panic() {
+                Some(SubsystemError::Panicked(name))
+            } else {
+                // Don't do anything in case of a cancellation;
+                // cancellations can't be forwarded (because the
+                // current function we are in will be cancelled
+                // simultaneously)
+                None
+            }
+        }
     };
 
     // Retrieve the handle that was passed into the subsystem.
@@ -83,7 +93,7 @@ async fn run_subsystem<Fut, Subsys, ErrType: ErrTypeTraits, Err>(
     // it was decided to pass ownership instead.
     //
     // It is still important that the handle does not leak out of the subsystem.
-    let mut subsystem_handle = match redirected_subsystem_handle.try_recv() {
+    let subsystem_handle = match redirected_subsystem_handle.try_recv() {
         Ok(s) => s,
         Err(_) => panic!("The SubsystemHandle object must not be leaked out of the subsystem!"),
     };

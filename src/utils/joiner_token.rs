@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{Arc, Weak},
-};
+use std::{fmt::Debug, sync::Arc};
 
 use tokio::sync::watch;
 
@@ -78,7 +75,7 @@ impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
         // Ignore errors; if the channel got closed, that definitely means
         // no more children exist.
         let _ = subscriber
-            .wait_for(|(alive, children)| *children == 0)
+            .wait_for(|(_alive, children)| *children == 0)
             .await;
     }
 
@@ -93,7 +90,7 @@ impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
         while let Some(parent) = maybe_parent {
             parent
                 .counter
-                .send_modify(|(alive, children)| *children += 1);
+                .send_modify(|(_alive, children)| *children += 1);
             maybe_parent = parent.parent.as_ref();
         }
 
@@ -110,11 +107,9 @@ impl<ErrType: ErrTypeTraits> JoinerToken<ErrType> {
         (Self { inner }, weak_ref)
     }
 
+    #[cfg(test)]
     pub(crate) fn count(&self) -> u32 {
         self.inner.counter.borrow().1
-    }
-    pub(crate) fn alive(&self) -> bool {
-        self.inner.counter.borrow().0
     }
 
     pub(crate) fn raise_failure(&self, stop_reason: SubsystemError<ErrType>) {
@@ -153,19 +148,29 @@ impl JoinerTokenRef {
             .wait_for(|&(alive, children)| !alive && children == 0)
             .await;
     }
+
+    #[cfg(test)]
+    pub(crate) fn count(&self) -> u32 {
+        self.counter.borrow().1
+    }
+
+    #[cfg(test)]
+    pub(crate) fn alive(&self) -> bool {
+        self.counter.borrow().0
+    }
 }
 
 impl<ErrType: ErrTypeTraits> Drop for JoinerToken<ErrType> {
     fn drop(&mut self) {
         self.inner
             .counter
-            .send_modify(|(alive, children)| *alive = false);
+            .send_modify(|(alive, _children)| *alive = false);
 
         let mut maybe_parent = self.inner.parent.as_ref();
         while let Some(parent) = maybe_parent {
             parent
                 .counter
-                .send_modify(|(alive, children)| *children -= 1);
+                .send_modify(|(_alive, children)| *children -= 1);
             maybe_parent = parent.parent.as_ref();
         }
     }
@@ -212,6 +217,78 @@ mod tests {
 
         drop(child3);
         assert_eq!(0, root.count());
+    }
+
+    #[test]
+    #[traced_test]
+    fn counters_weak() {
+        let (root, weak_root) = JoinerToken::<BoxedError>::new(|_| None);
+        assert_eq!(0, weak_root.count());
+        assert!(weak_root.alive());
+
+        let (child1, weak_child1) = root.child_token(|_| None);
+        assert_eq!(1, weak_root.count());
+        assert!(weak_root.alive());
+        assert_eq!(0, weak_child1.count());
+        assert!(weak_child1.alive());
+
+        let (child2, weak_child2) = child1.child_token(|_| None);
+        assert_eq!(2, weak_root.count());
+        assert!(weak_root.alive());
+        assert_eq!(1, weak_child1.count());
+        assert!(weak_child1.alive());
+        assert_eq!(0, weak_child2.count());
+        assert!(weak_child2.alive());
+
+        let (child3, weak_child3) = child1.child_token(|_| None);
+        assert_eq!(3, weak_root.count());
+        assert!(weak_root.alive());
+        assert_eq!(2, weak_child1.count());
+        assert!(weak_child1.alive());
+        assert_eq!(0, weak_child2.count());
+        assert!(weak_child2.alive());
+        assert_eq!(0, weak_child3.count());
+        assert!(weak_child3.alive());
+
+        drop(child1);
+        assert_eq!(2, weak_root.count());
+        assert!(weak_root.alive());
+        assert_eq!(2, weak_child1.count());
+        assert!(!weak_child1.alive());
+        assert_eq!(0, weak_child2.count());
+        assert!(weak_child2.alive());
+        assert_eq!(0, weak_child3.count());
+        assert!(weak_child3.alive());
+
+        drop(child2);
+        assert_eq!(1, weak_root.count());
+        assert!(weak_root.alive());
+        assert_eq!(1, weak_child1.count());
+        assert!(!weak_child1.alive());
+        assert_eq!(0, weak_child2.count());
+        assert!(!weak_child2.alive());
+        assert_eq!(0, weak_child3.count());
+        assert!(weak_child3.alive());
+
+        drop(child3);
+        assert_eq!(0, weak_root.count());
+        assert!(weak_root.alive());
+        assert_eq!(0, weak_child1.count());
+        assert!(!weak_child1.alive());
+        assert_eq!(0, weak_child2.count());
+        assert!(!weak_child2.alive());
+        assert_eq!(0, weak_child3.count());
+        assert!(!weak_child3.alive());
+
+        drop(root);
+        assert_eq!(0, weak_root.count());
+        assert!(!weak_root.alive());
+        assert_eq!(0, weak_child1.count());
+        assert!(!weak_child1.alive());
+        assert_eq!(0, weak_child2.count());
+        assert!(!weak_child2.alive());
+        assert_eq!(0, weak_child3.count());
+        assert!(!weak_child3.alive());
     }
 
     #[tokio::test]
