@@ -32,12 +32,6 @@ async fn subsys1_keepalive(subsys: SubsystemHandle) -> Result<()> {
                 .on_panic(ErrorAction::CatchAndLocalShutdown),
         );
 
-        // TODO: Change spawn API
-        // let nested_subsys = SubsystemBuilder::new("Subsys1", subsys1)
-        //     .on_failure(ErrorAction::CatchAndLocalShutdown)
-        //     .on_panic(ErrorAction::CatchAndLocalShutdown)
-        //     .spawn_on(subsys);
-
         if let Err(err) = nested_subsys.join().await {
             tracing::error!("Subsystem1 failed: {:?}", miette::Report::from(err));
         } else {
