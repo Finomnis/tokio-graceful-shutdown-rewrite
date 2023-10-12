@@ -14,6 +14,35 @@ use crate::{
     BoxedError, ErrTypeTraits, ErrorAction, NestedSubsystem, SubsystemHandle,
 };
 
+/// Acts as the root of the subsystem tree and forms the entry point for
+/// any interaction with this crate.
+///
+/// Every project that uses this crate has to create a [`Toplevel`] object somewhere.
+///
+/// # Examples
+///
+/// ```
+/// use miette::Result;
+/// use tokio::time::Duration;
+/// use tokio_graceful_shutdown::{SubsystemHandle, Toplevel};
+///
+/// async fn my_subsystem(subsys: SubsystemHandle) -> Result<()> {
+///     subsys.request_shutdown();
+///     Ok(())
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<()> {
+///     Toplevel::new(|s| async move {
+///         s.start(SubsystemBuilder::new("MySubsystem", my_subsystem));
+///     })
+///     .catch_signals()
+///     .handle_shutdown_requests(Duration::from_millis(1000))
+///     .await
+///     .map_err(Into::into)
+/// }
+/// ```
+///
 #[must_use = "This toplevel must be consumed by calling `handle_shutdown_requests` on it."]
 pub struct Toplevel<ErrType: ErrTypeTraits = BoxedError> {
     root_handle: SubsystemHandle<ErrType>,
@@ -25,6 +54,11 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
     /// Creates a new Toplevel object.
     ///
     /// The Toplevel object is the base for everything else in this crate.
+    ///
+    /// # Arguments
+    ///
+    /// * `subsystem` - The subsystem that should be spawned as the root node.
+    ///                 Usually the job of this subsystem is to spawn further subsystems.
     #[allow(clippy::new_without_default)]
     pub fn new<Fut, Subsys>(subsystem: Subsys) -> Self
     where
@@ -67,6 +101,54 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
         }
     }
 
+    /// Registers signal handlers to initiate a program shutdown when certain operating system
+    /// signals get received.
+    ///
+    /// The following signals will be handled:
+    ///
+    /// - On Windows:
+    ///     - Ctrl+C (SIGINT)
+    ///
+    /// - On Unix:
+    ///     - SIGINT and SIGTERM
+    ///
+    /// # Caveats
+    ///
+    /// This function internally uses [tokio::signal] with all of its caveats.
+    ///
+    /// Especially the caveats from [tokio::signal::unix::Signal] are important for Unix targets.
+    ///
+    pub fn catch_signals(self) -> Self {
+        let shutdown_token = self.root_handle.get_cancellation_token().clone();
+
+        tokio::spawn(async move {
+            wait_for_signal().await;
+            shutdown_token.cancel();
+        });
+
+        self
+    }
+
+    /// Performs a clean program shutdown, once a shutdown is requested or all subsystems have
+    /// finished.
+    ///
+    /// In most cases, this will be the final method of `main()`, as it blocks until program
+    /// shutdown and returns an appropriate `Result` that can be directly returned by `main()`.
+    ///
+    /// When a program shutdown happens, this function collects the return values of all subsystems
+    /// to determine the return code of the entire program.
+    ///
+    /// When the shutdown takes longer than the given timeout, an error will be returned and remaining subsystems
+    /// will be cancelled.
+    ///
+    /// # Arguments
+    ///
+    /// * `shutdown_timeout` - The maximum time that is allowed to pass after a shutdown was initiated.
+    ///
+    /// # Returns
+    ///
+    /// An error of type [`GracefulShutdownError`] if an error occurred.
+    ///
     pub async fn handle_shutdown_requests(
         self,
         shutdown_timeout: Duration,
@@ -120,17 +202,6 @@ impl<ErrType: ErrTypeTraits> Toplevel<ErrType> {
                 Err(GracefulShutdownError::ShutdownTimeout(collect_errors()))
             }
         }
-    }
-
-    pub fn catch_signals(self) -> Self {
-        let shutdown_token = self.root_handle.get_cancellation_token().clone();
-
-        tokio::spawn(async move {
-            wait_for_signal().await;
-            shutdown_token.cancel();
-        });
-
-        self
     }
 
     #[doc(hidden)]
